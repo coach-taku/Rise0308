@@ -110,6 +110,7 @@ CREATE POLICY "Coaches can manage tournaments" ON tournaments FOR ALL USING (is_
 CREATE POLICY "Users can view own mandala" ON mandala_charts FOR SELECT USING (auth.uid() = user_id OR is_coach());
 CREATE POLICY "Users can insert own mandala" ON mandala_charts FOR INSERT WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can update own mandala" ON mandala_charts FOR UPDATE USING (auth.uid() = user_id);
+CREATE POLICY "Users can delete own mandala" ON mandala_charts FOR DELETE USING (auth.uid() = user_id);
 
 -- Daily Records policies
 CREATE POLICY "Users can view own records or coaches see all" ON daily_records FOR SELECT

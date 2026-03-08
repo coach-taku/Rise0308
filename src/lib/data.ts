@@ -1,5 +1,5 @@
 import { Profile, Tournament, MandalaChart, DailyRecord, Group, Comment } from '@/types/database'
-import { supabase, isSupabaseConfigured } from './supabase'
+import { supabase, isSupabaseConfigured, ensureAuthSession } from './supabase'
 
 // ============================================================
 // Demo mode data store (when Supabase is not configured)
@@ -166,9 +166,9 @@ export async function getProfile(userId: string): Promise<Profile | null> {
     .from('profiles')
     .select('*')
     .eq('id', userId)
-    .single()
+    .limit(1)
   if (error) return null
-  return data
+  return data && data.length > 0 ? data[0] : null
 }
 
 export async function updateProfilePoints(userId: string, points: number): Promise<void> {
@@ -258,9 +258,8 @@ export async function getActiveTournament(): Promise<Tournament | null> {
     .select('*')
     .eq('is_active', true)
     .limit(1)
-    .single()
   if (error) return null
-  return data
+  return data && data.length > 0 ? data[0] : null
 }
 
 export async function upsertTournament(tournament: Partial<Tournament> & { name: string; target_date: string }): Promise<Tournament> {
@@ -295,9 +294,8 @@ export async function upsertTournament(tournament: Partial<Tournament> & { name:
     .from('tournaments')
     .upsert(tournament)
     .select()
-    .single()
   if (error) throw error
-  return data
+  return data![0]
 }
 
 // Mandala Chart functions
@@ -312,9 +310,11 @@ export async function getMandalaChart(userId: string): Promise<MandalaChart | nu
     .eq('user_id', userId)
     .order('updated_at', { ascending: false })
     .limit(1)
-    .single()
-  if (error) return null
-  return data
+  if (error) {
+    console.error('getMandalaChart error:', error)
+    return null
+  }
+  return data && data.length > 0 ? data[0] : null
 }
 
 export async function saveMandalaChart(chart: Partial<MandalaChart> & { user_id: string }): Promise<MandalaChart> {
@@ -337,16 +337,51 @@ export async function saveMandalaChart(chart: Partial<MandalaChart> & { user_id:
     return newChart
   }
 
-  const { data, error } = await supabase
-    .from('mandala_charts')
-    .upsert({
-      ...chart,
-      updated_at: new Date().toISOString(),
-    })
-    .select()
-    .single()
-  if (error) throw error
-  return data
+  // Ensure user is authenticated for RLS
+  const authUserId = await ensureAuthSession()
+  if (!authUserId) {
+    throw new Error('認証セッションが見つかりません。再ログインしてください。')
+  }
+
+  // First check if a chart already exists for this user
+  const existing = await getMandalaChart(chart.user_id)
+  const now = new Date().toISOString()
+
+  if (existing) {
+    // Update existing chart
+    const { data, error } = await supabase
+      .from('mandala_charts')
+      .update({
+        core_goal: chart.core_goal,
+        main_elements: chart.main_elements,
+        sub_goals: chart.sub_goals,
+        updated_at: now,
+      })
+      .eq('id', existing.id)
+      .select()
+    if (error) {
+      console.error('saveMandalaChart update error:', error)
+      throw error
+    }
+    return data && data.length > 0 ? data[0] : existing
+  } else {
+    // Insert new chart
+    const { data, error } = await supabase
+      .from('mandala_charts')
+      .insert({
+        user_id: chart.user_id,
+        core_goal: chart.core_goal || '',
+        main_elements: chart.main_elements || [],
+        sub_goals: chart.sub_goals || [],
+        updated_at: now,
+      })
+      .select()
+    if (error) {
+      console.error('saveMandalaChart insert error:', error)
+      throw error
+    }
+    return data![0]
+  }
 }
 
 // Daily Record functions
@@ -411,9 +446,12 @@ export async function getDailyRecord(userId: string, targetDate: string): Promis
     .select('*')
     .eq('user_id', userId)
     .eq('target_date', targetDate)
-    .single()
-  if (error) return null
-  return data
+    .limit(1)
+  if (error) {
+    console.error('getDailyRecord error:', error)
+    return null
+  }
+  return data && data.length > 0 ? data[0] : null
 }
 
 export async function saveDailyRecord(record: Partial<DailyRecord> & { user_id: string; target_date: string }): Promise<DailyRecord> {
@@ -444,13 +482,61 @@ export async function saveDailyRecord(record: Partial<DailyRecord> & { user_id: 
     return newRecord
   }
 
-  const { data, error } = await supabase
-    .from('daily_records')
-    .upsert(record, { onConflict: 'user_id,target_date' })
-    .select()
-    .single()
-  if (error) throw error
-  return data
+  // Ensure user is authenticated for RLS
+  const authUserId = await ensureAuthSession()
+  if (!authUserId) {
+    throw new Error('認証セッションが見つかりません。再ログインしてください。')
+  }
+
+  // Check if record already exists
+  const existing = await getDailyRecord(record.user_id, record.target_date)
+
+  if (existing) {
+    // Update existing record
+    const { data, error } = await supabase
+      .from('daily_records')
+      .update({
+        sleep_hours: record.sleep_hours,
+        fatigue_level: record.fatigue_level,
+        has_pain: record.has_pain,
+        pain_details: record.pain_details,
+        participation_status: record.participation_status,
+        selected_goals: record.selected_goals,
+        self_evaluation: record.self_evaluation,
+        reflection_text: record.reflection_text,
+        earned_points: record.earned_points,
+      })
+      .eq('id', existing.id)
+      .select()
+    if (error) {
+      console.error('saveDailyRecord update error:', error)
+      throw error
+    }
+    return data && data.length > 0 ? data[0] : existing
+  } else {
+    // Insert new record
+    const { data, error } = await supabase
+      .from('daily_records')
+      .insert({
+        user_id: record.user_id,
+        target_date: record.target_date,
+        sleep_hours: record.sleep_hours ?? 7,
+        fatigue_level: record.fatigue_level ?? 5,
+        has_pain: record.has_pain ?? false,
+        pain_details: record.pain_details ?? '',
+        participation_status: record.participation_status ?? '参加',
+        selected_goals: record.selected_goals ?? [],
+        self_evaluation: record.self_evaluation ?? 5,
+        reflection_text: record.reflection_text ?? '',
+        earned_points: record.earned_points ?? 0,
+      })
+      .select()
+    if (error) {
+      console.error('saveDailyRecord insert error:', error)
+      throw error
+    }
+    return data![0]
+  }
 }
 
 // Comment functions
@@ -491,9 +577,8 @@ export async function addComment(recordId: string, userId: string, content: stri
     .from('comments')
     .insert({ record_id: recordId, user_id: userId, content })
     .select('*, profiles(*)')
-    .single()
   if (error) throw error
-  return data
+  return data![0]
 }
 
 // Group functions
