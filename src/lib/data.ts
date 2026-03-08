@@ -6,12 +6,12 @@ import { supabase, isSupabaseConfigured } from './supabase'
 // ============================================================
 
 const DEMO_PROFILES: Profile[] = [
-  { id: 'player-1', name: '山田 花子', role: 'player', group_id: 'group-1', total_points: 156, created_at: '2025-12-01T00:00:00Z' },
-  { id: 'player-2', name: '鈴木 美咲', role: 'player', group_id: 'group-1', total_points: 203, created_at: '2025-12-01T00:00:00Z' },
-  { id: 'player-3', name: '佐藤 遥', role: 'player', group_id: 'group-2', total_points: 178, created_at: '2025-12-01T00:00:00Z' },
-  { id: 'player-4', name: '田中 結衣', role: 'player', group_id: 'group-2', total_points: 145, created_at: '2025-12-01T00:00:00Z' },
-  { id: 'coach-1', name: '高橋 コーチ', role: 'coach', group_id: null, total_points: 0, created_at: '2025-12-01T00:00:00Z' },
-  { id: 'coach-2', name: '伊藤 監督', role: 'coach', group_id: null, total_points: 0, created_at: '2025-12-01T00:00:00Z' },
+  { id: 'player-1', name: '山田 花子', email: 'player1@risenote.local', role: 'player', group_id: 'group-1', total_points: 156, created_at: '2025-12-01T00:00:00Z' },
+  { id: 'player-2', name: '鈴木 美咲', email: 'player2@risenote.local', role: 'player', group_id: 'group-1', total_points: 203, created_at: '2025-12-01T00:00:00Z' },
+  { id: 'player-3', name: '佐藤 遥', email: 'player3@risenote.local', role: 'player', group_id: 'group-2', total_points: 178, created_at: '2025-12-01T00:00:00Z' },
+  { id: 'player-4', name: '田中 結衣', email: 'player4@risenote.local', role: 'player', group_id: 'group-2', total_points: 145, created_at: '2025-12-01T00:00:00Z' },
+  { id: 'coach-1', name: '高橋 コーチ', email: 'coach1@risenote.local', role: 'coach', group_id: null, total_points: 0, created_at: '2025-12-01T00:00:00Z' },
+  { id: 'coach-2', name: '伊藤 監督', email: 'coach2@risenote.local', role: 'coach', group_id: null, total_points: 0, created_at: '2025-12-01T00:00:00Z' },
 ]
 
 const DEMO_GROUPS: Group[] = [
@@ -211,8 +211,16 @@ export async function loginUser(name: string, password: string): Promise<Profile
   if (!profiles || profiles.length === 0) return null
 
   const profile = profiles[0]
+
+  // Use email from profile if available, otherwise look up from auth.users via profile id
+  let email = profile.email
+  if (!email) {
+    // Fallback: try to get email from Supabase auth user metadata
+    // This won't work from client-side, so we need the email in profiles table
+    email = `${profile.id}@risenote.local`
+  }
+
   // Sign in with Supabase Auth
-  const email = `${profile.id}@risenote.local`
   const { error } = await supabase.auth.signInWithPassword({
     email,
     password,

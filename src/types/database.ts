@@ -1,6 +1,7 @@
 export interface Profile {
   id: string
   name: string
+  email?: string
   role: 'player' | 'coach'
   group_id: string | null
   total_points: number

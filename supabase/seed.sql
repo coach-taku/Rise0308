@@ -29,11 +29,11 @@ ON CONFLICT DO NOTHING;
 
 -- Example (uncomment and replace UUIDs after creating auth users):
 /*
-INSERT INTO profiles (id, name, role, group_id, total_points) VALUES
-  ('PLAYER1_UUID', '山田 花子', 'player', 'a1000000-0000-0000-0000-000000000001', 0),
-  ('PLAYER2_UUID', '鈴木 美咲', 'player', 'a1000000-0000-0000-0000-000000000001', 0),
-  ('COACH1_UUID',  '高橋 コーチ', 'coach', NULL, 0),
-  ('COACH2_UUID',  '伊藤 監督', 'coach', NULL, 0)
+INSERT INTO profiles (id, name, email, role, group_id, total_points) VALUES
+  ('PLAYER1_UUID', '山田 花子', 'player1@risenote.local', 'player', 'a1000000-0000-0000-0000-000000000001', 0),
+  ('PLAYER2_UUID', '鈴木 美咲', 'player2@risenote.local', 'player', 'a1000000-0000-0000-0000-000000000001', 0),
+  ('COACH1_UUID',  '高橋 コーチ', 'coach1@risenote.local', 'coach', NULL, 0),
+  ('COACH2_UUID',  '伊藤 監督', 'coach2@risenote.local', 'coach', NULL, 0)
 ON CONFLICT (id) DO NOTHING;
 */
 

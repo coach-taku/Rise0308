@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS groups (
 CREATE TABLE IF NOT EXISTS profiles (
   id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
+  email TEXT,
   role TEXT NOT NULL CHECK (role IN ('player', 'coach')),
   group_id UUID REFERENCES groups(id),
   total_points INTEGER DEFAULT 0,
