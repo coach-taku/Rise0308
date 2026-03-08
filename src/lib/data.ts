@@ -212,20 +212,40 @@ export async function loginUser(name: string, password: string): Promise<Profile
 
   const profile = profiles[0]
 
-  // Use email from profile if available, otherwise look up from auth.users via profile id
+  // Use email from profile if available
   let email = profile.email
   if (!email) {
-    // Fallback: try to get email from Supabase auth user metadata
-    // This won't work from client-side, so we need the email in profiles table
     email = `${profile.id}@risenote.local`
   }
 
   // Sign in with Supabase Auth
-  const { error } = await supabase.auth.signInWithPassword({
+  const { data: authData, error } = await supabase.auth.signInWithPassword({
     email,
     password,
   })
-  if (error) return null
+  if (error) {
+    console.error('Supabase Auth login error:', error)
+    return null
+  }
+
+  // IMPORTANT: Use the auth user ID to ensure consistency with RLS auth.uid()
+  // The auth user ID may differ from the profile ID if setup was inconsistent
+  const authUserId = authData.user?.id
+  if (authUserId && authUserId !== profile.id) {
+    console.warn('Auth user ID differs from profile ID. Using auth user ID:', authUserId)
+    // Try to get the profile matching the auth user ID
+    const { data: authProfile } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', authUserId)
+      .limit(1)
+    if (authProfile && authProfile.length > 0) {
+      return authProfile[0]
+    }
+    // If no profile exists for this auth user, return profile with corrected id
+    return { ...profile, id: authUserId }
+  }
+
   return profile
 }
 
@@ -337,14 +357,17 @@ export async function saveMandalaChart(chart: Partial<MandalaChart> & { user_id:
     return newChart
   }
 
-  // Ensure user is authenticated for RLS
+  // Ensure user is authenticated for RLS - use auth.uid() as the canonical user_id
   const authUserId = await ensureAuthSession()
   if (!authUserId) {
     throw new Error('認証セッションが見つかりません。再ログインしてください。')
   }
 
+  // Use auth user ID to match RLS policy (auth.uid() = user_id)
+  const effectiveUserId = authUserId
+
   // First check if a chart already exists for this user
-  const existing = await getMandalaChart(chart.user_id)
+  const existing = await getMandalaChart(effectiveUserId)
   const now = new Date().toISOString()
 
   if (existing) {
@@ -365,11 +388,11 @@ export async function saveMandalaChart(chart: Partial<MandalaChart> & { user_id:
     }
     return data && data.length > 0 ? data[0] : existing
   } else {
-    // Insert new chart
+    // Insert new chart - use auth user ID as user_id
     const { data, error } = await supabase
       .from('mandala_charts')
       .insert({
-        user_id: chart.user_id,
+        user_id: effectiveUserId,
         core_goal: chart.core_goal || '',
         main_elements: chart.main_elements || [],
         sub_goals: chart.sub_goals || [],
@@ -482,14 +505,17 @@ export async function saveDailyRecord(record: Partial<DailyRecord> & { user_id: 
     return newRecord
   }
 
-  // Ensure user is authenticated for RLS
+  // Ensure user is authenticated for RLS - use auth.uid() as the canonical user_id
   const authUserId = await ensureAuthSession()
   if (!authUserId) {
     throw new Error('認証セッションが見つかりません。再ログインしてください。')
   }
 
+  // Use auth user ID to match RLS policy (auth.uid() = user_id)
+  const effectiveUserId = authUserId
+
   // Check if record already exists
-  const existing = await getDailyRecord(record.user_id, record.target_date)
+  const existing = await getDailyRecord(effectiveUserId, record.target_date)
 
   if (existing) {
     // Update existing record
@@ -514,11 +540,11 @@ export async function saveDailyRecord(record: Partial<DailyRecord> & { user_id: 
     }
     return data && data.length > 0 ? data[0] : existing
   } else {
-    // Insert new record
+    // Insert new record - use auth user ID as user_id
     const { data, error } = await supabase
       .from('daily_records')
       .insert({
-        user_id: record.user_id,
+        user_id: effectiveUserId,
         target_date: record.target_date,
         sleep_hours: record.sleep_hours ?? 7,
         fatigue_level: record.fatigue_level ?? 5,
