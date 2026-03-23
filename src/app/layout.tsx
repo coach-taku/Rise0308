@@ -20,6 +20,7 @@ export default function RootLayout({
   return (
     <html lang="ja">
       <head>
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
         <link
           href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;600;700&display=swap"
           rel="stylesheet"
