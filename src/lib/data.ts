@@ -1,5 +1,5 @@
 import { User, Tournament, MandalaChart, DailyRecord, DailyRecordWithUser, Comment } from '@/types/database'
-import { supabase, isSupabaseConfigured } from './supabase'
+import { getSupabase, isSupabaseConfigured } from './supabase'
 
 // ============================================================
 // Demo data (used when Supabase is not configured)
@@ -133,8 +133,8 @@ const DEMO_MANDALA: MandalaChart = {
 // In-memory demo store
 let demoRecords = generateDemoRecords()
 let demoComments = generateDemoComments(demoRecords)
-let demoUsers = [...DEMO_USERS]
-let demoTournaments = [...DEMO_TOURNAMENTS]
+const demoUsers = [...DEMO_USERS]
+const demoTournaments = [...DEMO_TOURNAMENTS]
 let demoMandala: Record<string, MandalaChart> = { 'player-1': DEMO_MANDALA }
 
 // ============================================================
@@ -143,14 +143,14 @@ let demoMandala: Record<string, MandalaChart> = { 'player-1': DEMO_MANDALA }
 
 export async function getUsers(): Promise<User[]> {
   if (!isSupabaseConfigured()) return demoUsers
-  const { data, error } = await supabase.from('users').select('*').order('name')
+  const { data, error } = await getSupabase().from('users').select('*').order('name')
   if (error) throw error
   return data || []
 }
 
 export async function getUser(userId: string): Promise<User | null> {
   if (!isSupabaseConfigured()) return demoUsers.find(u => u.id === userId) || null
-  const { data, error } = await supabase.from('users').select('*').eq('id', userId).single()
+  const { data, error } = await getSupabase().from('users').select('*').eq('id', userId).single()
   if (error) return null
   return data
 }
@@ -160,7 +160,7 @@ export async function loginUser(name: string, password: string): Promise<User | 
     // Demo: match name, accept any password
     return demoUsers.find(u => u.name === name) || null
   }
-  const { data, error } = await supabase
+  const { data, error } = await getSupabase()
     .from('users')
     .select('*')
     .eq('name', name)
@@ -171,21 +171,23 @@ export async function loginUser(name: string, password: string): Promise<User | 
 }
 
 export async function logoutUser(): Promise<void> {
-  localStorage.removeItem('rise_note_session')
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem('rise_note_session')
+  }
 }
 
 // ---------- Tournaments ----------
 
 export async function getTournaments(): Promise<Tournament[]> {
   if (!isSupabaseConfigured()) return demoTournaments
-  const { data, error } = await supabase.from('tournaments').select('*').order('target_date')
+  const { data, error } = await getSupabase().from('tournaments').select('*').order('target_date')
   if (error) throw error
   return data || []
 }
 
 export async function getActiveTournament(): Promise<Tournament | null> {
   if (!isSupabaseConfigured()) return demoTournaments[0] || null
-  const { data, error } = await supabase
+  const { data, error } = await getSupabase()
     .from('tournaments')
     .select('*')
     .order('target_date', { ascending: true })
@@ -212,7 +214,7 @@ export async function upsertTournament(tournament: Partial<Tournament> & { name:
     demoTournaments.push(newT)
     return newT
   }
-  const { data, error } = await supabase.from('tournaments').upsert(tournament).select().single()
+  const { data, error } = await getSupabase().from('tournaments').upsert(tournament).select().single()
   if (error) throw error
   return data
 }
@@ -221,7 +223,7 @@ export async function upsertTournament(tournament: Partial<Tournament> & { name:
 
 export async function getMandalaChart(userId: string): Promise<MandalaChart | null> {
   if (!isSupabaseConfigured()) return demoMandala[userId] || null
-  const { data, error } = await supabase
+  const { data, error } = await getSupabase()
     .from('mandala_charts')
     .select('*')
     .eq('user_id', userId)
@@ -252,7 +254,7 @@ export async function saveMandalaChart(chart: Partial<MandalaChart> & { user_id:
     demoMandala[chart.user_id] = newChart
     return newChart
   }
-  const { data, error } = await supabase.from('mandala_charts').upsert(chart).select().single()
+  const { data, error } = await getSupabase().from('mandala_charts').upsert(chart).select().single()
   if (error) throw error
   return data
 }
@@ -266,7 +268,7 @@ export async function getDailyRecords(userId: string, startDate?: string, endDat
     if (endDate) records = records.filter(r => r.record_date <= endDate)
     return records.sort((a, b) => a.record_date.localeCompare(b.record_date))
   }
-  let query = supabase.from('daily_records').select('*').eq('user_id', userId).order('record_date')
+  let query = getSupabase().from('daily_records').select('*').eq('user_id', userId).order('record_date')
   if (startDate) query = query.gte('record_date', startDate)
   if (endDate) query = query.lte('record_date', endDate)
   const { data, error } = await query
@@ -287,7 +289,7 @@ export async function getAllDailyRecords(startDate?: string, endDate?: string): 
         comments: demoComments.filter(c => c.daily_record_id === r.id),
       }))
   }
-  let query = supabase.from('daily_records').select('*, users(*), comments(*, users(*))').order('record_date', { ascending: false })
+  let query = getSupabase().from('daily_records').select('*, users(*), comments(*, users(*))').order('record_date', { ascending: false })
   if (startDate) query = query.gte('record_date', startDate)
   if (endDate) query = query.lte('record_date', endDate)
   const { data, error } = await query
@@ -299,7 +301,7 @@ export async function getDailyRecord(userId: string, recordDate: string): Promis
   if (!isSupabaseConfigured()) {
     return demoRecords.find(r => r.user_id === userId && r.record_date === recordDate) || null
   }
-  const { data, error } = await supabase
+  const { data, error } = await getSupabase()
     .from('daily_records')
     .select('*')
     .eq('user_id', userId)
@@ -336,7 +338,7 @@ export async function saveDailyRecord(record: Partial<DailyRecord> & { user_id: 
     demoRecords.push(newRecord)
     return newRecord
   }
-  const { data, error } = await supabase
+  const { data, error } = await getSupabase()
     .from('daily_records')
     .upsert(record, { onConflict: 'user_id,record_date' })
     .select()
@@ -353,7 +355,7 @@ export async function getComments(recordId: string): Promise<Comment[]> {
       .filter(c => c.daily_record_id === recordId)
       .map(c => ({ ...c, users: demoUsers.find(u => u.id === c.user_id) }))
   }
-  const { data, error } = await supabase
+  const { data, error } = await getSupabase()
     .from('comments')
     .select('*, users(*)')
     .eq('daily_record_id', recordId)
@@ -375,7 +377,7 @@ export async function addComment(dailyRecordId: string, userId: string, content:
     demoComments.push(newComment)
     return newComment
   }
-  const { data, error } = await supabase
+  const { data, error } = await getSupabase()
     .from('comments')
     .insert({ daily_record_id: dailyRecordId, user_id: userId, content })
     .select('*, users(*)')

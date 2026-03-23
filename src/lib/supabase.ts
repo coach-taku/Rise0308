@@ -3,16 +3,27 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 
-// Check if Supabase is configured (non-empty real values)
-export const isSupabaseConfigured = () => {
+// Check if Supabase is configured with real (non-placeholder) values
+export const isSupabaseConfigured = (): boolean => {
   return (
-    supabaseUrl !== '' &&
-    supabaseAnonKey !== '' &&
+    supabaseUrl.length > 0 &&
+    supabaseAnonKey.length > 0 &&
+    supabaseUrl.startsWith('https://') &&
     !supabaseUrl.includes('placeholder')
   )
 }
 
-// Only create client if configured; otherwise provide a dummy that will never be used
-export const supabase: SupabaseClient = isSupabaseConfigured()
-  ? createClient(supabaseUrl, supabaseAnonKey)
-  : createClient('https://placeholder.supabase.co', 'placeholder-key')
+// Lazily-initialised singleton – only created when truly configured
+let _supabase: SupabaseClient | null = null
+
+export const getSupabase = (): SupabaseClient => {
+  if (!_supabase) {
+    if (!isSupabaseConfigured()) {
+      throw new Error(
+        'Supabase is not configured. All data access should go through demo helpers in data.ts.'
+      )
+    }
+    _supabase = createClient(supabaseUrl, supabaseAnonKey)
+  }
+  return _supabase
+}
