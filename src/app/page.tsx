@@ -7,11 +7,10 @@ export default function Home() {
   const router = useRouter()
 
   useEffect(() => {
-    // Check if user is logged in
     const session = localStorage.getItem('rise_note_session')
     if (session) {
       const user = JSON.parse(session)
-      if (user.role === 'coach') {
+      if (user.role === 'staff') {
         router.push('/coach/dashboard')
       } else {
         router.push('/player/dashboard')

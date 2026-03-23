@@ -3,7 +3,7 @@
 import { useRouter, usePathname } from 'next/navigation'
 import { logoutUser } from '@/lib/data'
 
-export default function Header({ userName, role }: { userName: string; role: 'player' | 'coach' }) {
+export default function Header({ userName, role }: { userName: string; role: 'player' | 'staff' }) {
   const router = useRouter()
   const pathname = usePathname()
 
@@ -12,7 +12,7 @@ export default function Header({ userName, role }: { userName: string; role: 'pl
     router.push('/login')
   }
 
-  const navItems = role === 'coach'
+  const navItems = role === 'staff'
     ? [
         { href: '/coach/dashboard', label: 'チーム一覧' },
         { href: '/coach/tournament', label: '大会設定' },
@@ -31,11 +31,10 @@ export default function Header({ userName, role }: { userName: string; role: 'pl
           <div className="flex items-center gap-3">
             <h1
               className="text-lg font-bold text-brand-main cursor-pointer"
-              onClick={() => router.push(role === 'coach' ? '/coach/dashboard' : '/player/dashboard')}
+              onClick={() => router.push(role === 'staff' ? '/coach/dashboard' : '/player/dashboard')}
             >
               RISE NOTE
             </h1>
-            {/* PC nav items */}
             <nav className="hidden md:flex items-center gap-1 ml-6">
               {navItems.map(item => (
                 <button

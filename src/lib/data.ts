@@ -1,26 +1,21 @@
-import { Profile, Tournament, MandalaChart, DailyRecord, Group, Comment } from '@/types/database'
-import { supabase, isSupabaseConfigured, ensureAuthSession } from './supabase'
+import { User, Tournament, MandalaChart, DailyRecord, DailyRecordWithUser, Comment } from '@/types/database'
+import { supabase, isSupabaseConfigured } from './supabase'
 
 // ============================================================
-// Demo mode data store (when Supabase is not configured)
+// Demo data (used when Supabase is not configured)
 // ============================================================
 
-const DEMO_PROFILES: Profile[] = [
-  { id: 'player-1', name: '山田 花子', email: 'player1@risenote.local', role: 'player', group_id: 'group-1', total_points: 156, created_at: '2025-12-01T00:00:00Z' },
-  { id: 'player-2', name: '鈴木 美咲', email: 'player2@risenote.local', role: 'player', group_id: 'group-1', total_points: 203, created_at: '2025-12-01T00:00:00Z' },
-  { id: 'player-3', name: '佐藤 遥', email: 'player3@risenote.local', role: 'player', group_id: 'group-2', total_points: 178, created_at: '2025-12-01T00:00:00Z' },
-  { id: 'player-4', name: '田中 結衣', email: 'player4@risenote.local', role: 'player', group_id: 'group-2', total_points: 145, created_at: '2025-12-01T00:00:00Z' },
-  { id: 'coach-1', name: '高橋 コーチ', email: 'coach1@risenote.local', role: 'coach', group_id: null, total_points: 0, created_at: '2025-12-01T00:00:00Z' },
-  { id: 'coach-2', name: '伊藤 監督', email: 'coach2@risenote.local', role: 'coach', group_id: null, total_points: 0, created_at: '2025-12-01T00:00:00Z' },
-]
-
-const DEMO_GROUPS: Group[] = [
-  { id: 'group-1', name: 'グループA' },
-  { id: 'group-2', name: 'グループB' },
+const DEMO_USERS: User[] = [
+  { id: 'player-1', name: '山田 花子', role: 'player', password: 'rise' },
+  { id: 'player-2', name: '鈴木 美咲', role: 'player', password: 'rise' },
+  { id: 'player-3', name: '佐藤 遥', role: 'player', password: 'rise' },
+  { id: 'player-4', name: '田中 結衣', role: 'player', password: 'rise' },
+  { id: 'staff-1', name: '高橋 コーチ', role: 'staff', password: 'rise' },
+  { id: 'staff-2', name: '伊藤 監督', role: 'staff', password: 'rise' },
 ]
 
 const DEMO_TOURNAMENTS: Tournament[] = [
-  { id: 'tournament-1', name: 'インターハイ予選', target_date: '2026-06-15', is_active: true },
+  { id: 'tournament-1', name: 'インターハイ予選', target_date: '2026-06-15' },
 ]
 
 function generateDemoRecords(): DailyRecord[] {
@@ -49,7 +44,7 @@ function generateDemoRecords(): DailyRecord[] {
     const dateStr = date.toISOString().split('T')[0]
 
     for (let pi = 0; pi < players.length; pi++) {
-      if (Math.random() < 0.15) continue // 15% chance of no entry
+      if (Math.random() < 0.15) continue
 
       const sleepHours = 5.5 + Math.random() * 3
       const fatigue = Math.floor(Math.random() * 7) + 2
@@ -62,16 +57,16 @@ function generateDemoRecords(): DailyRecord[] {
       records.push({
         id: `record-${dateStr}-${pi}`,
         user_id: players[pi],
-        target_date: dateStr,
+        record_date: dateStr,
         sleep_hours: Math.round(sleepHours * 10) / 10,
         fatigue_level: fatigue,
         has_pain: hasPain,
-        pain_details: hasPain ? '右膝に軽い違和感' : '',
+        pain_detail: hasPain ? '右膝に軽い違和感' : '',
         participation_status: statuses[statusIdx],
-        selected_goals: goals[pi].slice(0, Math.floor(Math.random() * 2) + 1),
+        target_items: goals[pi].slice(0, Math.floor(Math.random() * 2) + 1),
         self_evaluation: evaluation,
-        reflection_text: reflections[reflectionIdx],
-        earned_points: earnedPoints,
+        reflection: reflections[reflectionIdx],
+        points: earnedPoints,
         created_at: date.toISOString(),
       })
     }
@@ -94,7 +89,7 @@ function generateDemoComments(records: DailyRecord[]): Comment[] {
       const commenterId = record.user_id === 'player-1' ? 'player-2' : 'player-1'
       comments.push({
         id: `comment-${idx}`,
-        record_id: record.id,
+        daily_record_id: record.id,
         user_id: commenterId,
         content: commentTexts[Math.floor(Math.random() * commentTexts.length)],
         created_at: record.created_at,
@@ -102,9 +97,9 @@ function generateDemoComments(records: DailyRecord[]): Comment[] {
     }
     if (Math.random() < 0.3) {
       comments.push({
-        id: `comment-coach-${idx}`,
-        record_id: record.id,
-        user_id: 'coach-1',
+        id: `comment-staff-${idx}`,
+        daily_record_id: record.id,
+        user_id: 'staff-1',
         content: '良い振り返りだね。その意識を続けていこう!',
         created_at: record.created_at,
       })
@@ -117,11 +112,11 @@ const DEMO_MANDALA: MandalaChart = {
   id: 'mandala-1',
   user_id: 'player-1',
   core_goal: 'インターハイ出場',
-  main_elements: [
+  elements: [
     'シュート力', 'ディフェンス', '体力', 'パス・連携',
     'メンタル', '知識・戦術', 'チームワーク', '生活習慣'
   ],
-  sub_goals: [
+  actions: [
     ['レイアップ精度UP', 'ミドルシュート練習', '3Pシュート挑戦', 'フリースロー成功率UP', 'シュートフォーム確認', 'ゲームでのシュート判断', '毎日シュート100本', 'シュートの自信をつける'],
     ['1on1で負けない', 'スライドステップ強化', 'ボールマンプレッシャー', 'ヘルプディフェンス', 'スクリーンアウト', 'ローテーション理解', 'コミュニケーション', 'ディフェンスの姿勢維持'],
     ['持久走タイム向上', '体幹トレーニング毎日', '下半身強化', 'アジリティ向上', 'ストレッチ習慣化', '食事管理', 'ランニング週3回', '疲労回復意識'],
@@ -131,155 +126,73 @@ const DEMO_MANDALA: MandalaChart = {
     ['仲間を褒める', '弱点を補い合う', '練習中の声かけ', 'ベンチからの応援', '後輩の面倒を見る', '先輩に学ぶ', '全員で目標共有', '信頼関係構築'],
     ['早寝早起き', '栄養バランス', '水分補給', '睡眠7時間以上', '学業との両立', '時間管理', 'ケガ予防', '体重管理'],
   ],
-  updated_at: '2026-01-15T00:00:00Z',
+  target_date: '2026-06-15',
   created_at: '2026-01-15T00:00:00Z',
 }
 
-// In-memory store for demo mode
+// In-memory demo store
 let demoRecords = generateDemoRecords()
 let demoComments = generateDemoComments(demoRecords)
-let demoProfiles = [...DEMO_PROFILES]
+let demoUsers = [...DEMO_USERS]
 let demoTournaments = [...DEMO_TOURNAMENTS]
 let demoMandala: Record<string, MandalaChart> = { 'player-1': DEMO_MANDALA }
 
 // ============================================================
-// Data access functions - works with Supabase or demo mode
+// Data access functions
 // ============================================================
 
-export async function getProfiles(): Promise<Profile[]> {
-  if (!isSupabaseConfigured()) return demoProfiles
-
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('*')
-    .order('name')
+export async function getUsers(): Promise<User[]> {
+  if (!isSupabaseConfigured()) return demoUsers
+  const { data, error } = await supabase.from('users').select('*').order('name')
   if (error) throw error
   return data || []
 }
 
-export async function getProfile(userId: string): Promise<Profile | null> {
-  if (!isSupabaseConfigured()) {
-    return demoProfiles.find(p => p.id === userId) || null
-  }
-
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', userId)
-    .limit(1)
+export async function getUser(userId: string): Promise<User | null> {
+  if (!isSupabaseConfigured()) return demoUsers.find(u => u.id === userId) || null
+  const { data, error } = await supabase.from('users').select('*').eq('id', userId).single()
   if (error) return null
-  return data && data.length > 0 ? data[0] : null
+  return data
 }
 
-export async function updateProfilePoints(userId: string, points: number): Promise<void> {
+export async function loginUser(name: string, password: string): Promise<User | null> {
   if (!isSupabaseConfigured()) {
-    const profile = demoProfiles.find(p => p.id === userId)
-    if (profile) profile.total_points += points
-    return
+    // Demo: match name, accept any password
+    return demoUsers.find(u => u.name === name) || null
   }
-
-  const { error } = await supabase.rpc('increment_points', {
-    user_id: userId,
-    points_to_add: points,
-  })
-  if (error) {
-    // Fallback: fetch and update
-    const profile = await getProfile(userId)
-    if (profile) {
-      await supabase
-        .from('profiles')
-        .update({ total_points: profile.total_points + points })
-        .eq('id', userId)
-    }
-  }
-}
-
-export async function loginUser(name: string, password: string): Promise<Profile | null> {
-  if (!isSupabaseConfigured()) {
-    // Demo mode: accept any password
-    const profile = demoProfiles.find(p => p.name === name)
-    return profile || null
-  }
-
-  // Find profile by name to get email
-  const { data: profiles } = await supabase
-    .from('profiles')
+  const { data, error } = await supabase
+    .from('users')
     .select('*')
     .eq('name', name)
-    .limit(1)
-
-  if (!profiles || profiles.length === 0) return null
-
-  const profile = profiles[0]
-
-  // Use email from profile if available
-  let email = profile.email
-  if (!email) {
-    email = `${profile.id}@risenote.local`
-  }
-
-  // Sign in with Supabase Auth
-  const { data: authData, error } = await supabase.auth.signInWithPassword({
-    email,
-    password,
-  })
-  if (error) {
-    console.error('Supabase Auth login error:', error)
-    return null
-  }
-
-  // IMPORTANT: Use the auth user ID to ensure consistency with RLS auth.uid()
-  // The auth user ID may differ from the profile ID if setup was inconsistent
-  const authUserId = authData.user?.id
-  if (authUserId && authUserId !== profile.id) {
-    console.warn('Auth user ID differs from profile ID. Using auth user ID:', authUserId)
-    // Try to get the profile matching the auth user ID
-    const { data: authProfile } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', authUserId)
-      .limit(1)
-    if (authProfile && authProfile.length > 0) {
-      return authProfile[0]
-    }
-    // If no profile exists for this auth user, return profile with corrected id
-    return { ...profile, id: authUserId }
-  }
-
-  return profile
+    .eq('password', password)
+    .single()
+  if (error) return null
+  return data
 }
 
 export async function logoutUser(): Promise<void> {
-  if (isSupabaseConfigured()) {
-    await supabase.auth.signOut()
-  }
   localStorage.removeItem('rise_note_session')
 }
 
-// Tournament functions
+// ---------- Tournaments ----------
+
 export async function getTournaments(): Promise<Tournament[]> {
   if (!isSupabaseConfigured()) return demoTournaments
-
-  const { data, error } = await supabase
-    .from('tournaments')
-    .select('*')
-    .order('target_date', { ascending: true })
+  const { data, error } = await supabase.from('tournaments').select('*').order('target_date')
   if (error) throw error
   return data || []
 }
 
 export async function getActiveTournament(): Promise<Tournament | null> {
-  if (!isSupabaseConfigured()) {
-    return demoTournaments.find(t => t.is_active) || null
-  }
-
+  if (!isSupabaseConfigured()) return demoTournaments[0] || null
   const { data, error } = await supabase
     .from('tournaments')
     .select('*')
-    .eq('is_active', true)
+    .order('target_date', { ascending: true })
     .limit(1)
+    .single()
   if (error) return null
-  return data && data.length > 0 ? data[0] : null
+  return data
 }
 
 export async function upsertTournament(tournament: Partial<Tournament> & { name: string; target_date: string }): Promise<Tournament> {
@@ -287,7 +200,7 @@ export async function upsertTournament(tournament: Partial<Tournament> & { name:
     if (tournament.id) {
       const idx = demoTournaments.findIndex(t => t.id === tournament.id)
       if (idx >= 0) {
-        demoTournaments[idx] = { ...demoTournaments[idx], ...tournament }
+        demoTournaments[idx] = { ...demoTournaments[idx], ...tournament } as Tournament
         return demoTournaments[idx]
       }
     }
@@ -295,360 +208,178 @@ export async function upsertTournament(tournament: Partial<Tournament> & { name:
       id: `tournament-${Date.now()}`,
       name: tournament.name,
       target_date: tournament.target_date,
-      is_active: tournament.is_active ?? true,
-    }
-    // Deactivate others if this is active
-    if (newT.is_active) {
-      demoTournaments.forEach(t => t.is_active = false)
     }
     demoTournaments.push(newT)
     return newT
   }
-
-  // Deactivate others if setting active
-  if (tournament.is_active) {
-    await supabase.from('tournaments').update({ is_active: false }).neq('id', tournament.id || '')
-  }
-
-  const { data, error } = await supabase
-    .from('tournaments')
-    .upsert(tournament)
-    .select()
+  const { data, error } = await supabase.from('tournaments').upsert(tournament).select().single()
   if (error) throw error
-  return data![0]
+  return data
 }
 
-// Mandala Chart functions
-export async function getMandalaChart(userId: string): Promise<MandalaChart | null> {
-  if (!isSupabaseConfigured()) {
-    return demoMandala[userId] || null
-  }
+// ---------- Mandala Chart ----------
 
+export async function getMandalaChart(userId: string): Promise<MandalaChart | null> {
+  if (!isSupabaseConfigured()) return demoMandala[userId] || null
   const { data, error } = await supabase
     .from('mandala_charts')
     .select('*')
     .eq('user_id', userId)
-    .order('updated_at', { ascending: false })
+    .order('created_at', { ascending: false })
     .limit(1)
-  if (error) {
-    console.error('getMandalaChart error:', error)
-    return null
-  }
-  return data && data.length > 0 ? data[0] : null
+    .single()
+  if (error) return null
+  return data
 }
 
 export async function saveMandalaChart(chart: Partial<MandalaChart> & { user_id: string }): Promise<MandalaChart> {
   if (!isSupabaseConfigured()) {
     const existing = demoMandala[chart.user_id]
     if (existing) {
-      const updated = { ...existing, ...chart, updated_at: new Date().toISOString() }
-      demoMandala[chart.user_id] = updated
-      return updated
+      const updated = { ...existing, ...chart }
+      demoMandala[chart.user_id] = updated as MandalaChart
+      return updated as MandalaChart
     }
     const newChart: MandalaChart = {
       id: `mandala-${Date.now()}`,
       user_id: chart.user_id,
       core_goal: chart.core_goal || '',
-      main_elements: chart.main_elements || Array(8).fill(''),
-      sub_goals: chart.sub_goals || Array(8).fill(Array(8).fill('')),
-      updated_at: new Date().toISOString(),
+      elements: chart.elements || Array(8).fill(''),
+      actions: chart.actions || Array(8).fill(null).map(() => Array(8).fill('')),
+      target_date: chart.target_date || null,
+      created_at: new Date().toISOString(),
     }
     demoMandala[chart.user_id] = newChart
     return newChart
   }
-
-  // Ensure user is authenticated for RLS - use auth.uid() as the canonical user_id
-  const authUserId = await ensureAuthSession()
-  if (!authUserId) {
-    throw new Error('認証セッションが見つかりません。再ログインしてください。')
-  }
-
-  // Use auth user ID to match RLS policy (auth.uid() = user_id)
-  const effectiveUserId = authUserId
-
-  // First check if a chart already exists for this user
-  const existing = await getMandalaChart(effectiveUserId)
-  const now = new Date().toISOString()
-
-  if (existing) {
-    // Update existing chart
-    const { data, error } = await supabase
-      .from('mandala_charts')
-      .update({
-        core_goal: chart.core_goal,
-        main_elements: chart.main_elements,
-        sub_goals: chart.sub_goals,
-        updated_at: now,
-      })
-      .eq('id', existing.id)
-      .select()
-    if (error) {
-      console.error('saveMandalaChart update error:', error)
-      throw error
-    }
-    return data && data.length > 0 ? data[0] : existing
-  } else {
-    // Insert new chart - use auth user ID as user_id
-    const { data, error } = await supabase
-      .from('mandala_charts')
-      .insert({
-        user_id: effectiveUserId,
-        core_goal: chart.core_goal || '',
-        main_elements: chart.main_elements || [],
-        sub_goals: chart.sub_goals || [],
-        updated_at: now,
-      })
-      .select()
-    if (error) {
-      console.error('saveMandalaChart insert error:', error)
-      throw error
-    }
-    return data![0]
-  }
+  const { data, error } = await supabase.from('mandala_charts').upsert(chart).select().single()
+  if (error) throw error
+  return data
 }
 
-// Daily Record functions
+// ---------- Daily Records ----------
+
 export async function getDailyRecords(userId: string, startDate?: string, endDate?: string): Promise<DailyRecord[]> {
   if (!isSupabaseConfigured()) {
     let records = demoRecords.filter(r => r.user_id === userId)
-    if (startDate) records = records.filter(r => r.target_date >= startDate)
-    if (endDate) records = records.filter(r => r.target_date <= endDate)
-    return records.sort((a, b) => a.target_date.localeCompare(b.target_date))
+    if (startDate) records = records.filter(r => r.record_date >= startDate)
+    if (endDate) records = records.filter(r => r.record_date <= endDate)
+    return records.sort((a, b) => a.record_date.localeCompare(b.record_date))
   }
-
-  let query = supabase
-    .from('daily_records')
-    .select('*')
-    .eq('user_id', userId)
-    .order('target_date', { ascending: true })
-
-  if (startDate) query = query.gte('target_date', startDate)
-  if (endDate) query = query.lte('target_date', endDate)
-
+  let query = supabase.from('daily_records').select('*').eq('user_id', userId).order('record_date')
+  if (startDate) query = query.gte('record_date', startDate)
+  if (endDate) query = query.lte('record_date', endDate)
   const { data, error } = await query
   if (error) throw error
   return data || []
 }
 
-export async function getAllDailyRecords(startDate?: string, endDate?: string): Promise<DailyRecordWithProfile[]> {
+export async function getAllDailyRecords(startDate?: string, endDate?: string): Promise<DailyRecordWithUser[]> {
   if (!isSupabaseConfigured()) {
     let records = [...demoRecords]
-    if (startDate) records = records.filter(r => r.target_date >= startDate)
-    if (endDate) records = records.filter(r => r.target_date <= endDate)
+    if (startDate) records = records.filter(r => r.record_date >= startDate)
+    if (endDate) records = records.filter(r => r.record_date <= endDate)
     return records
-      .sort((a, b) => b.target_date.localeCompare(a.target_date))
+      .sort((a, b) => b.record_date.localeCompare(a.record_date))
       .map(r => ({
         ...r,
-        profiles: demoProfiles.find(p => p.id === r.user_id),
-        comments: demoComments.filter(c => c.record_id === r.id),
+        users: demoUsers.find(u => u.id === r.user_id),
+        comments: demoComments.filter(c => c.daily_record_id === r.id),
       }))
   }
-
-  let query = supabase
-    .from('daily_records')
-    .select('*, profiles(*), comments(*)')
-    .order('target_date', { ascending: false })
-
-  if (startDate) query = query.gte('target_date', startDate)
-  if (endDate) query = query.lte('target_date', endDate)
-
+  let query = supabase.from('daily_records').select('*, users(*), comments(*, users(*))').order('record_date', { ascending: false })
+  if (startDate) query = query.gte('record_date', startDate)
+  if (endDate) query = query.lte('record_date', endDate)
   const { data, error } = await query
   if (error) throw error
   return data || []
 }
 
-import { DailyRecordWithProfile } from '@/types/database'
-
-export async function getDailyRecord(userId: string, targetDate: string): Promise<DailyRecord | null> {
+export async function getDailyRecord(userId: string, recordDate: string): Promise<DailyRecord | null> {
   if (!isSupabaseConfigured()) {
-    return demoRecords.find(r => r.user_id === userId && r.target_date === targetDate) || null
+    return demoRecords.find(r => r.user_id === userId && r.record_date === recordDate) || null
   }
-
   const { data, error } = await supabase
     .from('daily_records')
     .select('*')
     .eq('user_id', userId)
-    .eq('target_date', targetDate)
-    .limit(1)
-  if (error) {
-    console.error('getDailyRecord error:', error)
-    return null
-  }
-  return data && data.length > 0 ? data[0] : null
+    .eq('record_date', recordDate)
+    .single()
+  if (error) return null
+  return data
 }
 
-export async function saveDailyRecord(record: Partial<DailyRecord> & { user_id: string; target_date: string }): Promise<DailyRecord> {
+export async function saveDailyRecord(record: Partial<DailyRecord> & { user_id: string; record_date: string }): Promise<DailyRecord> {
   if (!isSupabaseConfigured()) {
     const existingIdx = demoRecords.findIndex(
-      r => r.user_id === record.user_id && r.target_date === record.target_date
+      r => r.user_id === record.user_id && r.record_date === record.record_date
     )
     if (existingIdx >= 0) {
-      demoRecords[existingIdx] = { ...demoRecords[existingIdx], ...record }
+      demoRecords[existingIdx] = { ...demoRecords[existingIdx], ...record } as DailyRecord
       return demoRecords[existingIdx]
     }
     const newRecord: DailyRecord = {
       id: `record-${Date.now()}`,
       user_id: record.user_id,
-      target_date: record.target_date,
+      record_date: record.record_date,
       sleep_hours: record.sleep_hours || 7,
       fatigue_level: record.fatigue_level || 5,
       has_pain: record.has_pain || false,
-      pain_details: record.pain_details || '',
+      pain_detail: record.pain_detail || '',
       participation_status: record.participation_status || '参加',
-      selected_goals: record.selected_goals || [],
+      target_items: record.target_items || [],
       self_evaluation: record.self_evaluation || 5,
-      reflection_text: record.reflection_text || '',
-      earned_points: record.earned_points || 0,
+      reflection: record.reflection || '',
+      points: record.points || 0,
       created_at: new Date().toISOString(),
     }
     demoRecords.push(newRecord)
     return newRecord
   }
-
-  // Ensure user is authenticated for RLS - use auth.uid() as the canonical user_id
-  const authUserId = await ensureAuthSession()
-  if (!authUserId) {
-    throw new Error('認証セッションが見つかりません。再ログインしてください。')
-  }
-
-  // Use auth user ID to match RLS policy (auth.uid() = user_id)
-  const effectiveUserId = authUserId
-
-  // Check if record already exists
-  const existing = await getDailyRecord(effectiveUserId, record.target_date)
-
-  if (existing) {
-    // Update existing record
-    const { data, error } = await supabase
-      .from('daily_records')
-      .update({
-        sleep_hours: record.sleep_hours,
-        fatigue_level: record.fatigue_level,
-        has_pain: record.has_pain,
-        pain_details: record.pain_details,
-        participation_status: record.participation_status,
-        selected_goals: record.selected_goals,
-        self_evaluation: record.self_evaluation,
-        reflection_text: record.reflection_text,
-        earned_points: record.earned_points,
-      })
-      .eq('id', existing.id)
-      .select()
-    if (error) {
-      console.error('saveDailyRecord update error:', error)
-      throw error
-    }
-    return data && data.length > 0 ? data[0] : existing
-  } else {
-    // Insert new record - use auth user ID as user_id
-    const { data, error } = await supabase
-      .from('daily_records')
-      .insert({
-        user_id: effectiveUserId,
-        target_date: record.target_date,
-        sleep_hours: record.sleep_hours ?? 7,
-        fatigue_level: record.fatigue_level ?? 5,
-        has_pain: record.has_pain ?? false,
-        pain_details: record.pain_details ?? '',
-        participation_status: record.participation_status ?? '参加',
-        selected_goals: record.selected_goals ?? [],
-        self_evaluation: record.self_evaluation ?? 5,
-        reflection_text: record.reflection_text ?? '',
-        earned_points: record.earned_points ?? 0,
-      })
-      .select()
-    if (error) {
-      console.error('saveDailyRecord insert error:', error)
-      throw error
-    }
-    return data![0]
-  }
+  const { data, error } = await supabase
+    .from('daily_records')
+    .upsert(record, { onConflict: 'user_id,record_date' })
+    .select()
+    .single()
+  if (error) throw error
+  return data
 }
 
-// Comment functions
+// ---------- Comments ----------
+
 export async function getComments(recordId: string): Promise<Comment[]> {
   if (!isSupabaseConfigured()) {
     return demoComments
-      .filter(c => c.record_id === recordId)
-      .map(c => ({
-        ...c,
-        profiles: demoProfiles.find(p => p.id === c.user_id),
-      }))
+      .filter(c => c.daily_record_id === recordId)
+      .map(c => ({ ...c, users: demoUsers.find(u => u.id === c.user_id) }))
   }
-
   const { data, error } = await supabase
     .from('comments')
-    .select('*, profiles(*)')
-    .eq('record_id', recordId)
-    .order('created_at', { ascending: true })
+    .select('*, users(*)')
+    .eq('daily_record_id', recordId)
+    .order('created_at')
   if (error) throw error
   return data || []
 }
 
-export async function addComment(recordId: string, userId: string, content: string): Promise<Comment> {
+export async function addComment(dailyRecordId: string, userId: string, content: string): Promise<Comment> {
   if (!isSupabaseConfigured()) {
     const newComment: Comment = {
       id: `comment-${Date.now()}`,
-      record_id: recordId,
+      daily_record_id: dailyRecordId,
       user_id: userId,
       content,
       created_at: new Date().toISOString(),
-      profiles: demoProfiles.find(p => p.id === userId),
+      users: demoUsers.find(u => u.id === userId),
     }
     demoComments.push(newComment)
     return newComment
   }
-
   const { data, error } = await supabase
     .from('comments')
-    .insert({ record_id: recordId, user_id: userId, content })
-    .select('*, profiles(*)')
+    .insert({ daily_record_id: dailyRecordId, user_id: userId, content })
+    .select('*, users(*)')
+    .single()
   if (error) throw error
-  return data![0]
-}
-
-// Group functions
-export async function getGroups(): Promise<Group[]> {
-  if (!isSupabaseConfigured()) return DEMO_GROUPS
-
-  const { data, error } = await supabase
-    .from('groups')
-    .select('*')
-    .order('name')
-  if (error) throw error
-  return data || []
-}
-
-export async function getGroupMembers(groupId: string): Promise<Profile[]> {
-  if (!isSupabaseConfigured()) {
-    return demoProfiles.filter(p => p.group_id === groupId)
-  }
-
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('group_id', groupId)
-  if (error) throw error
-  return data || []
-}
-
-export async function getTeamRecordsWithProfiles(date?: string): Promise<DailyRecordWithProfile[]> {
-  if (!isSupabaseConfigured()) {
-    const targetDate = date || new Date().toISOString().split('T')[0]
-    const records = demoRecords
-      .filter(r => r.target_date === targetDate)
-      .map(r => ({
-        ...r,
-        profiles: demoProfiles.find(p => p.id === r.user_id),
-      }))
-    return records
-  }
-
-  const targetDate = date || new Date().toISOString().split('T')[0]
-  const { data, error } = await supabase
-    .from('daily_records')
-    .select('*, profiles(*)')
-    .eq('target_date', targetDate)
-  if (error) throw error
-  return data || []
+  return data
 }

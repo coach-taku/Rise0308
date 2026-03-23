@@ -9,15 +9,15 @@ const playerNavItems = [
   { href: '/player/timeline', label: '共有', icon: '💬' },
 ]
 
-const coachNavItems = [
+const staffNavItems = [
   { href: '/coach/dashboard', label: 'チーム', icon: '📊' },
   { href: '/coach/tournament', label: '大会設定', icon: '🏆' },
 ]
 
-export default function BottomNav({ role }: { role: 'player' | 'coach' }) {
+export default function BottomNav({ role }: { role: 'player' | 'staff' }) {
   const router = useRouter()
   const pathname = usePathname()
-  const items = role === 'coach' ? coachNavItems : playerNavItems
+  const items = role === 'staff' ? staffNavItems : playerNavItems
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-50 md:hidden">
@@ -29,9 +29,7 @@ export default function BottomNav({ role }: { role: 'player' | 'coach' }) {
               key={item.href}
               onClick={() => router.push(item.href)}
               className={`flex flex-col items-center justify-center w-full h-full transition-colors ${
-                isActive
-                  ? 'text-brand-main'
-                  : 'text-gray-400 hover:text-gray-600'
+                isActive ? 'text-brand-main' : 'text-gray-400 hover:text-gray-600'
               }`}
             >
               <span className="text-xl">{item.icon}</span>
