@@ -40,10 +40,31 @@ export default function LoginPage() {
       .catch((err) => {
         // Supabase 接続エラーや設定ミスの場合
         console.error('[LoginPage] ユーザー一覧の取得に失敗しました:', err)
-        setFetchError(
-          'ユーザー情報の読み込みに失敗しました。\n' +
-          'ネットワーク接続を確認するか、管理者にお問い合わせください。'
-        )
+
+        // エラーの種類に応じてメッセージを出し分ける
+        const code = err?.code ?? ''
+        const message = err?.message ?? ''
+
+        if (
+          code === '42501' ||
+          message.includes('permission denied') ||
+          message.includes('row-level security')
+        ) {
+          // RLS（アクセス権限）エラー → 管理者向けに具体的なヒントを表示
+          setFetchError(
+            'データベースへのアクセスが拒否されました。\n' +
+            '管理者へ: Supabase の SQL Editor で supabase/fix_rls.sql を実行してください。'
+          )
+        } else if (message.includes('Failed to fetch') || message.includes('NetworkError')) {
+          // ネットワークエラー
+          setFetchError('ネットワークに接続できませんでした。\nWi-Fiや通信状況を確認してページを再読み込みしてください。')
+        } else {
+          // その他のエラー
+          setFetchError(
+            'ユーザー情報の読み込みに失敗しました。\n' +
+            'ページを再読み込みするか、管理者にお問い合わせください。'
+          )
+        }
       })
       .finally(() => {
         setLoadingUsers(false)

@@ -158,6 +158,10 @@ export async function getUsers(): Promise<User[]> {
         details: error.details,
         hint: error.hint,
       })
+      // RLS（行レベルセキュリティ）によるアクセス拒否を検出してヒントを出す
+      if (error.code === '42501' || error.message?.includes('permission denied') || error.message?.includes('row-level security')) {
+        console.error('[data] ヒント: Supabase の RLS（行レベルセキュリティ）によりアクセスが拒否されています。supabase/fix_rls.sql を Supabase の SQL Editor で実行してください。')
+      }
       throw error
     }
     if (!data || data.length === 0) {
