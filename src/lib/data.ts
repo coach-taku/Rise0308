@@ -142,10 +142,32 @@ let demoMandala: Record<string, MandalaChart> = { 'player-1': DEMO_MANDALA }
 // ============================================================
 
 export async function getUsers(): Promise<User[]> {
-  if (!isSupabaseConfigured()) return demoUsers
-  const { data, error } = await getSupabase().from('users').select('*').order('name')
-  if (error) throw error
-  return data || []
+  // Supabase が未設定の場合はデモデータを返す
+  if (!isSupabaseConfigured()) {
+    console.info('[data] Supabase 未設定のためデモユーザーを返します。')
+    return demoUsers
+  }
+
+  try {
+    const { data, error } = await getSupabase().from('users').select('*').order('name')
+    if (error) {
+      // エラー内容をコンソールに詳しく出力する
+      console.error('[data] getUsers() でエラーが発生しました:', {
+        message: error.message,
+        code: error.code,
+        details: error.details,
+        hint: error.hint,
+      })
+      throw error
+    }
+    if (!data || data.length === 0) {
+      console.warn('[data] getUsers() の結果が空です。Supabase の users テーブルにデータが登録されているか確認してください。')
+    }
+    return data || []
+  } catch (err) {
+    console.error('[data] getUsers() で予期しないエラーが発生しました:', err)
+    throw err
+  }
 }
 
 export async function getUser(userId: string): Promise<User | null> {
@@ -156,18 +178,33 @@ export async function getUser(userId: string): Promise<User | null> {
 }
 
 export async function loginUser(name: string, password: string): Promise<User | null> {
+  // Supabase が未設定の場合はデモデータで照合する
   if (!isSupabaseConfigured()) {
-    // Demo: match name, accept any password
-    return demoUsers.find(u => u.name === name) || null
+    return demoUsers.find(u => u.name === name && u.password === password) || null
   }
-  const { data, error } = await getSupabase()
-    .from('users')
-    .select('*')
-    .eq('name', name)
-    .eq('password', password)
-    .single()
-  if (error) return null
-  return data
+
+  try {
+    const { data, error } = await getSupabase()
+      .from('users')
+      .select('*')
+      .eq('name', name)
+      .eq('password', password)
+      .single()
+    if (error) {
+      // PGRST116 は「0件」を意味するため合言葉誤りとして扱う（エラー扱いしない）
+      if (error.code !== 'PGRST116') {
+        console.error('[data] loginUser() でエラーが発生しました:', {
+          message: error.message,
+          code: error.code,
+        })
+      }
+      return null
+    }
+    return data
+  } catch (err) {
+    console.error('[data] loginUser() で予期しないエラーが発生しました:', err)
+    return null
+  }
 }
 
 export async function logoutUser(): Promise<void> {
