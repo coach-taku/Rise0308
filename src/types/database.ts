@@ -55,3 +55,30 @@ export interface DailyRecordWithUser extends DailyRecord {
   users?: User
   comments?: Comment[]
 }
+
+// ============================================================
+// カルテ機能（身体測定・MAX測定）
+// ============================================================
+
+// 身体測定データ
+export interface PhysicalRecord {
+  id: string
+  user_id: string
+  measured_date: string       // 測定日 (YYYY-MM-DD)
+  height_cm: number | null    // 身長 (cm)
+  weight_kg: number | null    // 体重 (kg)
+  body_fat_pct: number | null // 体脂肪率 (%)
+  muscle_mass_kg: number | null // 筋肉量 (kg)
+  created_at: string
+}
+
+// MAX測定データ（ウェイトトレーニング）
+export interface MaxTrainingRecord {
+  id: string
+  user_id: string
+  measured_date: string       // 測定日 (YYYY-MM-DD)
+  bench_press_kg: number | null  // ベンチプレス (kg)
+  squat_kg: number | null        // スクワット (kg)
+  deadlift_kg: number | null     // デッドリフト (kg)
+  created_at: string
+}
