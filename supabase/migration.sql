@@ -58,6 +58,31 @@ CREATE TABLE IF NOT EXISTS comments (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- 6. Physical Records table（身体測定データ）
+CREATE TABLE IF NOT EXISTS physical_records (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  measured_date DATE NOT NULL,
+  height_cm NUMERIC(5,1),
+  weight_kg NUMERIC(5,1),
+  body_fat_pct NUMERIC(4,1),
+  muscle_mass_kg NUMERIC(5,1),
+  created_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(user_id, measured_date)
+);
+
+-- 7. Max Training Records table（MAX測定データ）
+CREATE TABLE IF NOT EXISTS max_training_records (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  measured_date DATE NOT NULL,
+  bench_press_kg NUMERIC(5,1),
+  squat_kg NUMERIC(5,1),
+  deadlift_kg NUMERIC(5,1),
+  created_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(user_id, measured_date)
+);
+
 -- ============================================================
 -- Indexes
 -- ============================================================
@@ -66,3 +91,5 @@ CREATE INDEX IF NOT EXISTS idx_daily_records_user_date ON daily_records(user_id,
 CREATE INDEX IF NOT EXISTS idx_daily_records_date ON daily_records(record_date);
 CREATE INDEX IF NOT EXISTS idx_comments_record ON comments(daily_record_id);
 CREATE INDEX IF NOT EXISTS idx_mandala_user ON mandala_charts(user_id);
+CREATE INDEX IF NOT EXISTS idx_physical_records_user ON physical_records(user_id, measured_date);
+CREATE INDEX IF NOT EXISTS idx_max_training_records_user ON max_training_records(user_id, measured_date);

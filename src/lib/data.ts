@@ -1,4 +1,4 @@
-import { User, Tournament, MandalaChart, DailyRecord, DailyRecordWithUser, Comment } from '@/types/database'
+import { User, Tournament, MandalaChart, DailyRecord, DailyRecordWithUser, Comment, PhysicalRecord, MaxTrainingRecord } from '@/types/database'
 import { getSupabase, isSupabaseConfigured } from './supabase'
 
 // ============================================================
@@ -421,4 +421,139 @@ export async function addComment(dailyRecordId: string, userId: string, content:
     .single()
   if (error) throw error
   return data
+}
+
+// ============================================================
+// カルテ機能（身体測定・MAX測定）
+// ============================================================
+
+// --- デモデータ ---
+
+let demoPhysicalRecords: PhysicalRecord[] = [
+  { id: 'phys-1', user_id: 'player-1', measured_date: '2025-10-01', height_cm: 165.0, weight_kg: 58.0, body_fat_pct: 22.0, muscle_mass_kg: 42.5, created_at: '2025-10-01T00:00:00Z' },
+  { id: 'phys-2', user_id: 'player-1', measured_date: '2026-01-05', height_cm: 165.5, weight_kg: 57.0, body_fat_pct: 20.5, muscle_mass_kg: 43.0, created_at: '2026-01-05T00:00:00Z' },
+  { id: 'phys-3', user_id: 'player-1', measured_date: '2026-04-01', height_cm: 166.0, weight_kg: 56.5, body_fat_pct: 19.0, muscle_mass_kg: 44.0, created_at: '2026-04-01T00:00:00Z' },
+]
+
+let demoMaxRecords: MaxTrainingRecord[] = [
+  { id: 'max-1', user_id: 'player-1', measured_date: '2025-10-01', bench_press_kg: 30.0, squat_kg: 50.0, deadlift_kg: 60.0, created_at: '2025-10-01T00:00:00Z' },
+  { id: 'max-2', user_id: 'player-1', measured_date: '2026-01-05', bench_press_kg: 35.0, squat_kg: 55.0, deadlift_kg: 65.0, created_at: '2026-01-05T00:00:00Z' },
+  { id: 'max-3', user_id: 'player-1', measured_date: '2026-04-01', bench_press_kg: 40.0, squat_kg: 60.0, deadlift_kg: 70.0, created_at: '2026-04-01T00:00:00Z' },
+]
+
+// --- 身体測定データ ---
+
+export async function getPhysicalRecords(userId: string): Promise<PhysicalRecord[]> {
+  if (!isSupabaseConfigured()) {
+    return demoPhysicalRecords
+      .filter(r => r.user_id === userId)
+      .sort((a, b) => a.measured_date.localeCompare(b.measured_date))
+  }
+  const { data, error } = await getSupabase()
+    .from('physical_records')
+    .select('*')
+    .eq('user_id', userId)
+    .order('measured_date')
+  if (error) throw error
+  return data || []
+}
+
+export async function savePhysicalRecord(
+  record: Partial<PhysicalRecord> & { user_id: string; measured_date: string }
+): Promise<PhysicalRecord> {
+  if (!isSupabaseConfigured()) {
+    const idx = demoPhysicalRecords.findIndex(
+      r => r.user_id === record.user_id && r.measured_date === record.measured_date
+    )
+    if (idx >= 0) {
+      demoPhysicalRecords[idx] = { ...demoPhysicalRecords[idx], ...record } as PhysicalRecord
+      return demoPhysicalRecords[idx]
+    }
+    const newRecord: PhysicalRecord = {
+      id: `phys-${Date.now()}`,
+      user_id: record.user_id,
+      measured_date: record.measured_date,
+      height_cm: record.height_cm ?? null,
+      weight_kg: record.weight_kg ?? null,
+      body_fat_pct: record.body_fat_pct ?? null,
+      muscle_mass_kg: record.muscle_mass_kg ?? null,
+      created_at: new Date().toISOString(),
+    }
+    demoPhysicalRecords.push(newRecord)
+    return newRecord
+  }
+  const { data, error } = await getSupabase()
+    .from('physical_records')
+    .upsert(record, { onConflict: 'user_id,measured_date' })
+    .select()
+    .single()
+  if (error) throw error
+  return data
+}
+
+export async function deletePhysicalRecord(recordId: string): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    demoPhysicalRecords = demoPhysicalRecords.filter(r => r.id !== recordId)
+    return
+  }
+  const { error } = await getSupabase().from('physical_records').delete().eq('id', recordId)
+  if (error) throw error
+}
+
+// --- MAX測定データ ---
+
+export async function getMaxTrainingRecords(userId: string): Promise<MaxTrainingRecord[]> {
+  if (!isSupabaseConfigured()) {
+    return demoMaxRecords
+      .filter(r => r.user_id === userId)
+      .sort((a, b) => a.measured_date.localeCompare(b.measured_date))
+  }
+  const { data, error } = await getSupabase()
+    .from('max_training_records')
+    .select('*')
+    .eq('user_id', userId)
+    .order('measured_date')
+  if (error) throw error
+  return data || []
+}
+
+export async function saveMaxTrainingRecord(
+  record: Partial<MaxTrainingRecord> & { user_id: string; measured_date: string }
+): Promise<MaxTrainingRecord> {
+  if (!isSupabaseConfigured()) {
+    const idx = demoMaxRecords.findIndex(
+      r => r.user_id === record.user_id && r.measured_date === record.measured_date
+    )
+    if (idx >= 0) {
+      demoMaxRecords[idx] = { ...demoMaxRecords[idx], ...record } as MaxTrainingRecord
+      return demoMaxRecords[idx]
+    }
+    const newRecord: MaxTrainingRecord = {
+      id: `max-${Date.now()}`,
+      user_id: record.user_id,
+      measured_date: record.measured_date,
+      bench_press_kg: record.bench_press_kg ?? null,
+      squat_kg: record.squat_kg ?? null,
+      deadlift_kg: record.deadlift_kg ?? null,
+      created_at: new Date().toISOString(),
+    }
+    demoMaxRecords.push(newRecord)
+    return newRecord
+  }
+  const { data, error } = await getSupabase()
+    .from('max_training_records')
+    .upsert(record, { onConflict: 'user_id,measured_date' })
+    .select()
+    .single()
+  if (error) throw error
+  return data
+}
+
+export async function deleteMaxTrainingRecord(recordId: string): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    demoMaxRecords = demoMaxRecords.filter(r => r.id !== recordId)
+    return
+  }
+  const { error } = await getSupabase().from('max_training_records').delete().eq('id', recordId)
+  if (error) throw error
 }

@@ -6,6 +6,7 @@ const playerNavItems = [
   { href: '/player/dashboard', label: 'ホーム', icon: '🏠' },
   { href: '/player/daily', label: '記録', icon: '✏️' },
   { href: '/player/mandala', label: '目標', icon: '🎯' },
+  { href: '/player/karte', label: 'カルテ', icon: '📋' },
   { href: '/player/timeline', label: '共有', icon: '💬' },
 ]
 
