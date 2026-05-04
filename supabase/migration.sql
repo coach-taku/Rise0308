@@ -93,3 +93,59 @@ CREATE INDEX IF NOT EXISTS idx_comments_record ON comments(daily_record_id);
 CREATE INDEX IF NOT EXISTS idx_mandala_user ON mandala_charts(user_id);
 CREATE INDEX IF NOT EXISTS idx_physical_records_user ON physical_records(user_id, measured_date);
 CREATE INDEX IF NOT EXISTS idx_max_training_records_user ON max_training_records(user_id, measured_date);
+
+-- ============================================================
+-- RLS (Row Level Security) ポリシー
+-- 
+-- ★★★ 重要 ★★★
+-- Supabase はテーブル作成時にデフォルトで RLS が有効になります。
+-- RLS が有効でポリシーが未設定の場合、anon key からの全操作
+-- (SELECT/INSERT/UPDATE/DELETE) がブロックされます。
+-- 
+-- カルテ保存が失敗する場合は、以下のRLSセクションを
+-- Supabase SQL Editor で必ず実行してください。
+--
+-- このアプリはanon keyを使用してクライアント側でアクセス制御を行う。
+-- RLSを有効にした上で、anon ロールに全操作を許可するポリシーを設定する。
+-- これにより Supabase のデフォルト RLS ブロックを回避しつつ、
+-- 将来的にユーザーIDベースの細かいポリシーへ移行しやすくなる。
+-- ============================================================
+
+-- users テーブル
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "users_anon_select" ON users;
+CREATE POLICY "users_anon_select" ON users FOR SELECT TO anon USING (true);
+DROP POLICY IF EXISTS "users_anon_insert" ON users;
+CREATE POLICY "users_anon_insert" ON users FOR INSERT TO anon WITH CHECK (true);
+DROP POLICY IF EXISTS "users_anon_update" ON users;
+CREATE POLICY "users_anon_update" ON users FOR UPDATE TO anon USING (true) WITH CHECK (true);
+
+-- tournaments テーブル
+ALTER TABLE tournaments ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "tournaments_anon_all" ON tournaments;
+CREATE POLICY "tournaments_anon_all" ON tournaments FOR ALL TO anon USING (true) WITH CHECK (true);
+
+-- mandala_charts テーブル
+ALTER TABLE mandala_charts ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "mandala_charts_anon_all" ON mandala_charts;
+CREATE POLICY "mandala_charts_anon_all" ON mandala_charts FOR ALL TO anon USING (true) WITH CHECK (true);
+
+-- daily_records テーブル
+ALTER TABLE daily_records ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "daily_records_anon_all" ON daily_records;
+CREATE POLICY "daily_records_anon_all" ON daily_records FOR ALL TO anon USING (true) WITH CHECK (true);
+
+-- comments テーブル
+ALTER TABLE comments ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "comments_anon_all" ON comments;
+CREATE POLICY "comments_anon_all" ON comments FOR ALL TO anon USING (true) WITH CHECK (true);
+
+-- physical_records テーブル
+ALTER TABLE physical_records ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "physical_records_anon_all" ON physical_records;
+CREATE POLICY "physical_records_anon_all" ON physical_records FOR ALL TO anon USING (true) WITH CHECK (true);
+
+-- max_training_records テーブル
+ALTER TABLE max_training_records ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "max_training_records_anon_all" ON max_training_records;
+CREATE POLICY "max_training_records_anon_all" ON max_training_records FOR ALL TO anon USING (true) WITH CHECK (true);

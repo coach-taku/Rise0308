@@ -427,6 +427,42 @@ export async function addComment(dailyRecordId: string, userId: string, content:
 // カルテ機能（身体測定・MAX測定）
 // ============================================================
 
+// --- Supabase エラー解析ヘルパー ---
+function formatSupabaseError(error: { message?: string; code?: string; details?: string; hint?: string }): string {
+  const parts: string[] = []
+  if (error.code) parts.push(`[${error.code}]`)
+  if (error.message) parts.push(error.message)
+  if (error.details) parts.push(`(${error.details})`)
+  if (error.hint) parts.push(`ヒント: ${error.hint}`)
+  return parts.join(' ') || '不明なエラー'
+}
+
+function getErrorGuidance(error: { code?: string; message?: string }): string {
+  const code = error.code || ''
+  const msg = (error.message || '').toLowerCase()
+  // テーブル未作成
+  if (code === '42P01' || msg.includes('relation') && msg.includes('does not exist')) {
+    return 'テーブルが存在しません。Supabase SQL Editor で migration.sql を実行してください。'
+  }
+  // RLS権限エラー
+  if (code === '42501' || msg.includes('permission denied') || msg.includes('row-level security')) {
+    return 'RLSポリシーが未設定です。migration.sql の RLS セクションを Supabase SQL Editor で実行してください。'
+  }
+  // RLSによる空結果（new row violates row-level security policy）
+  if (msg.includes('new row violates row-level security')) {
+    return 'RLSポリシーがINSERT/UPDATEを拒否しています。anon ロール用のポリシーを設定してください。'
+  }
+  // 一意制約違反
+  if (code === '23505' || msg.includes('duplicate key') || msg.includes('unique constraint')) {
+    return '同じ日付のデータが既に存在します。'
+  }
+  // 外部キー違反
+  if (code === '23503' || msg.includes('foreign key')) {
+    return 'ユーザーIDが users テーブルに存在しません。ログインし直してください。'
+  }
+  return ''
+}
+
 // --- デモデータ ---
 
 let demoPhysicalRecords: PhysicalRecord[] = [
@@ -449,19 +485,42 @@ export async function getPhysicalRecords(userId: string): Promise<PhysicalRecord
       .filter(r => r.user_id === userId)
       .sort((a, b) => a.measured_date.localeCompare(b.measured_date))
   }
-  const { data, error } = await getSupabase()
-    .from('physical_records')
-    .select('*')
-    .eq('user_id', userId)
-    .order('measured_date')
-  if (error) throw error
-  return data || []
+  try {
+    const { data, error } = await getSupabase()
+      .from('physical_records')
+      .select('*')
+      .eq('user_id', userId)
+      .order('measured_date')
+    if (error) {
+      const guidance = getErrorGuidance(error)
+      console.error('[data] getPhysicalRecords() エラー:', {
+        message: error.message, code: error.code, details: error.details, hint: error.hint,
+        guidance,
+      })
+      const enhancedError = new Error(formatSupabaseError(error) + (guidance ? ` — ${guidance}` : ''))
+      throw enhancedError
+    }
+    console.info('[data] getPhysicalRecords() 成功: ', data?.length ?? 0, '件取得')
+    return data || []
+  } catch (err) {
+    console.error('[data] getPhysicalRecords() 予期しないエラー:', err)
+    throw err
+  }
 }
 
 export async function savePhysicalRecord(
-  record: Partial<PhysicalRecord> & { user_id: string; measured_date: string }
+  record: Partial<PhysicalRecord> & { user_id: string; measured_date: string },
+  existingId?: string | null
 ): Promise<PhysicalRecord> {
   if (!isSupabaseConfigured()) {
+    // デモモード: 既存IDがあれば更新、なければ日付一致を探す、なければ新規作成
+    if (existingId) {
+      const idx = demoPhysicalRecords.findIndex(r => r.id === existingId)
+      if (idx >= 0) {
+        demoPhysicalRecords[idx] = { ...demoPhysicalRecords[idx], ...record } as PhysicalRecord
+        return demoPhysicalRecords[idx]
+      }
+    }
     const idx = demoPhysicalRecords.findIndex(
       r => r.user_id === record.user_id && r.measured_date === record.measured_date
     )
@@ -482,13 +541,100 @@ export async function savePhysicalRecord(
     demoPhysicalRecords.push(newRecord)
     return newRecord
   }
-  const { data, error } = await getSupabase()
-    .from('physical_records')
-    .upsert(record, { onConflict: 'user_id,measured_date' })
-    .select()
-    .single()
-  if (error) throw error
-  return data
+
+  // Supabase に送る payload を明示的に構築（undefined を含めない）
+  const payload: Record<string, unknown> = {
+    user_id: record.user_id,
+    measured_date: record.measured_date,
+    height_cm: record.height_cm !== undefined ? record.height_cm : null,
+    weight_kg: record.weight_kg !== undefined ? record.weight_kg : null,
+    body_fat_pct: record.body_fat_pct !== undefined ? record.body_fat_pct : null,
+    muscle_mass_kg: record.muscle_mass_kg !== undefined ? record.muscle_mass_kg : null,
+  }
+
+  console.info('[data] savePhysicalRecord() 開始:', { existingId, payload })
+
+  try {
+    if (existingId) {
+      // 既存レコードの更新（IDで特定）
+      const { data, error } = await getSupabase()
+        .from('physical_records')
+        .update(payload)
+        .eq('id', existingId)
+        .select()
+        .single()
+      if (error) {
+        const guidance = getErrorGuidance(error)
+        console.error('[data] savePhysicalRecord() update エラー:', {
+          message: error.message, code: error.code, details: error.details, hint: error.hint,
+          guidance, payload, existingId,
+        })
+        throw new Error(formatSupabaseError(error) + (guidance ? ` — ${guidance}` : ''))
+      }
+      console.info('[data] savePhysicalRecord() 更新成功: id=', existingId)
+      return data
+    } else {
+      // 新規作成: まず insert を試みる。一意制約違反なら upsert にフォールバック
+      const { data: insertData, error: insertError } = await getSupabase()
+        .from('physical_records')
+        .insert(payload)
+        .select()
+        .single()
+
+      if (!insertError && insertData) {
+        console.info('[data] savePhysicalRecord() insert 成功: id=', insertData.id)
+        return insertData
+      }
+
+      // insert が一意制約違反 (23505) ならupsertにフォールバック
+      if (insertError && insertError.code === '23505') {
+        console.info('[data] savePhysicalRecord() 同日データ存在のため upsert にフォールバック')
+        const { data: upsertData, error: upsertError } = await getSupabase()
+          .from('physical_records')
+          .upsert(payload, { onConflict: 'user_id,measured_date' })
+          .select()
+          .single()
+        if (upsertError) {
+          const guidance = getErrorGuidance(upsertError)
+          console.error('[data] savePhysicalRecord() upsert エラー:', {
+            message: upsertError.message, code: upsertError.code,
+            details: upsertError.details, hint: upsertError.hint,
+            guidance, payload,
+          })
+          throw new Error(formatSupabaseError(upsertError) + (guidance ? ` — ${guidance}` : ''))
+        }
+        console.info('[data] savePhysicalRecord() upsert 成功: id=', upsertData?.id)
+        return upsertData
+      }
+
+      // insert がその他のエラー
+      if (insertError) {
+        const guidance = getErrorGuidance(insertError)
+        console.error('[data] savePhysicalRecord() insert エラー:', {
+          message: insertError.message, code: insertError.code,
+          details: insertError.details, hint: insertError.hint,
+          guidance, payload,
+        })
+        throw new Error(formatSupabaseError(insertError) + (guidance ? ` — ${guidance}` : ''))
+      }
+
+      // data が null の場合（RLS が有効で返却がブロックされた可能性）
+      console.warn('[data] savePhysicalRecord() insert 成功だがデータ未返却。RLSポリシーの SELECT 権限を確認してください。')
+      // データ再取得を試みる
+      const { data: refetchData } = await getSupabase()
+        .from('physical_records')
+        .select('*')
+        .eq('user_id', record.user_id)
+        .eq('measured_date', record.measured_date)
+        .single()
+      if (refetchData) return refetchData
+
+      throw new Error('保存は成功した可能性がありますが、データの取得に失敗しました。ページを再読み込みしてください。')
+    }
+  } catch (err) {
+    console.error('[data] savePhysicalRecord() 予期しないエラー:', err)
+    throw err
+  }
 }
 
 export async function deletePhysicalRecord(recordId: string): Promise<void> {
@@ -496,8 +642,21 @@ export async function deletePhysicalRecord(recordId: string): Promise<void> {
     demoPhysicalRecords = demoPhysicalRecords.filter(r => r.id !== recordId)
     return
   }
-  const { error } = await getSupabase().from('physical_records').delete().eq('id', recordId)
-  if (error) throw error
+  try {
+    const { error } = await getSupabase().from('physical_records').delete().eq('id', recordId)
+    if (error) {
+      const guidance = getErrorGuidance(error)
+      console.error('[data] deletePhysicalRecord() エラー:', {
+        message: error.message, code: error.code, details: error.details, hint: error.hint,
+        guidance, recordId,
+      })
+      throw new Error(formatSupabaseError(error) + (guidance ? ` — ${guidance}` : ''))
+    }
+    console.info('[data] deletePhysicalRecord() 削除成功: id=', recordId)
+  } catch (err) {
+    console.error('[data] deletePhysicalRecord() 予期しないエラー:', err)
+    throw err
+  }
 }
 
 // --- MAX測定データ ---
@@ -508,19 +667,41 @@ export async function getMaxTrainingRecords(userId: string): Promise<MaxTraining
       .filter(r => r.user_id === userId)
       .sort((a, b) => a.measured_date.localeCompare(b.measured_date))
   }
-  const { data, error } = await getSupabase()
-    .from('max_training_records')
-    .select('*')
-    .eq('user_id', userId)
-    .order('measured_date')
-  if (error) throw error
-  return data || []
+  try {
+    const { data, error } = await getSupabase()
+      .from('max_training_records')
+      .select('*')
+      .eq('user_id', userId)
+      .order('measured_date')
+    if (error) {
+      const guidance = getErrorGuidance(error)
+      console.error('[data] getMaxTrainingRecords() エラー:', {
+        message: error.message, code: error.code, details: error.details, hint: error.hint,
+        guidance,
+      })
+      throw new Error(formatSupabaseError(error) + (guidance ? ` — ${guidance}` : ''))
+    }
+    console.info('[data] getMaxTrainingRecords() 成功: ', data?.length ?? 0, '件取得')
+    return data || []
+  } catch (err) {
+    console.error('[data] getMaxTrainingRecords() 予期しないエラー:', err)
+    throw err
+  }
 }
 
 export async function saveMaxTrainingRecord(
-  record: Partial<MaxTrainingRecord> & { user_id: string; measured_date: string }
+  record: Partial<MaxTrainingRecord> & { user_id: string; measured_date: string },
+  existingId?: string | null
 ): Promise<MaxTrainingRecord> {
   if (!isSupabaseConfigured()) {
+    // デモモード: 既存IDがあれば更新、なければ日付一致を探す、なければ新規作成
+    if (existingId) {
+      const idx = demoMaxRecords.findIndex(r => r.id === existingId)
+      if (idx >= 0) {
+        demoMaxRecords[idx] = { ...demoMaxRecords[idx], ...record } as MaxTrainingRecord
+        return demoMaxRecords[idx]
+      }
+    }
     const idx = demoMaxRecords.findIndex(
       r => r.user_id === record.user_id && r.measured_date === record.measured_date
     )
@@ -540,13 +721,98 @@ export async function saveMaxTrainingRecord(
     demoMaxRecords.push(newRecord)
     return newRecord
   }
-  const { data, error } = await getSupabase()
-    .from('max_training_records')
-    .upsert(record, { onConflict: 'user_id,measured_date' })
-    .select()
-    .single()
-  if (error) throw error
-  return data
+
+  // Supabase に送る payload を明示的に構築（undefined を含めない）
+  const payload: Record<string, unknown> = {
+    user_id: record.user_id,
+    measured_date: record.measured_date,
+    bench_press_kg: record.bench_press_kg !== undefined ? record.bench_press_kg : null,
+    squat_kg: record.squat_kg !== undefined ? record.squat_kg : null,
+    deadlift_kg: record.deadlift_kg !== undefined ? record.deadlift_kg : null,
+  }
+
+  console.info('[data] saveMaxTrainingRecord() 開始:', { existingId, payload })
+
+  try {
+    if (existingId) {
+      // 既存レコードの更新（IDで特定）
+      const { data, error } = await getSupabase()
+        .from('max_training_records')
+        .update(payload)
+        .eq('id', existingId)
+        .select()
+        .single()
+      if (error) {
+        const guidance = getErrorGuidance(error)
+        console.error('[data] saveMaxTrainingRecord() update エラー:', {
+          message: error.message, code: error.code, details: error.details, hint: error.hint,
+          guidance, payload, existingId,
+        })
+        throw new Error(formatSupabaseError(error) + (guidance ? ` — ${guidance}` : ''))
+      }
+      console.info('[data] saveMaxTrainingRecord() 更新成功: id=', existingId)
+      return data
+    } else {
+      // 新規作成: まず insert を試みる。一意制約違反なら upsert にフォールバック
+      const { data: insertData, error: insertError } = await getSupabase()
+        .from('max_training_records')
+        .insert(payload)
+        .select()
+        .single()
+
+      if (!insertError && insertData) {
+        console.info('[data] saveMaxTrainingRecord() insert 成功: id=', insertData.id)
+        return insertData
+      }
+
+      // insert が一意制約違反 (23505) ならupsertにフォールバック
+      if (insertError && insertError.code === '23505') {
+        console.info('[data] saveMaxTrainingRecord() 同日データ存在のため upsert にフォールバック')
+        const { data: upsertData, error: upsertError } = await getSupabase()
+          .from('max_training_records')
+          .upsert(payload, { onConflict: 'user_id,measured_date' })
+          .select()
+          .single()
+        if (upsertError) {
+          const guidance = getErrorGuidance(upsertError)
+          console.error('[data] saveMaxTrainingRecord() upsert エラー:', {
+            message: upsertError.message, code: upsertError.code,
+            details: upsertError.details, hint: upsertError.hint,
+            guidance, payload,
+          })
+          throw new Error(formatSupabaseError(upsertError) + (guidance ? ` — ${guidance}` : ''))
+        }
+        console.info('[data] saveMaxTrainingRecord() upsert 成功: id=', upsertData?.id)
+        return upsertData
+      }
+
+      // insert がその他のエラー
+      if (insertError) {
+        const guidance = getErrorGuidance(insertError)
+        console.error('[data] saveMaxTrainingRecord() insert エラー:', {
+          message: insertError.message, code: insertError.code,
+          details: insertError.details, hint: insertError.hint,
+          guidance, payload,
+        })
+        throw new Error(formatSupabaseError(insertError) + (guidance ? ` — ${guidance}` : ''))
+      }
+
+      // data が null の場合（RLS が有効で返却がブロックされた可能性）
+      console.warn('[data] saveMaxTrainingRecord() insert 成功だがデータ未返却。RLSポリシーの SELECT 権限を確認してください。')
+      const { data: refetchData } = await getSupabase()
+        .from('max_training_records')
+        .select('*')
+        .eq('user_id', record.user_id)
+        .eq('measured_date', record.measured_date)
+        .single()
+      if (refetchData) return refetchData
+
+      throw new Error('保存は成功した可能性がありますが、データの取得に失敗しました。ページを再読み込みしてください。')
+    }
+  } catch (err) {
+    console.error('[data] saveMaxTrainingRecord() 予期しないエラー:', err)
+    throw err
+  }
 }
 
 export async function deleteMaxTrainingRecord(recordId: string): Promise<void> {
@@ -554,6 +820,19 @@ export async function deleteMaxTrainingRecord(recordId: string): Promise<void> {
     demoMaxRecords = demoMaxRecords.filter(r => r.id !== recordId)
     return
   }
-  const { error } = await getSupabase().from('max_training_records').delete().eq('id', recordId)
-  if (error) throw error
+  try {
+    const { error } = await getSupabase().from('max_training_records').delete().eq('id', recordId)
+    if (error) {
+      const guidance = getErrorGuidance(error)
+      console.error('[data] deleteMaxTrainingRecord() エラー:', {
+        message: error.message, code: error.code, details: error.details, hint: error.hint,
+        guidance, recordId,
+      })
+      throw new Error(formatSupabaseError(error) + (guidance ? ` — ${guidance}` : ''))
+    }
+    console.info('[data] deleteMaxTrainingRecord() 削除成功: id=', recordId)
+  } catch (err) {
+    console.error('[data] deleteMaxTrainingRecord() 予期しないエラー:', err)
+    throw err
+  }
 }

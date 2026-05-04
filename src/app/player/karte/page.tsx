@@ -16,6 +16,14 @@ import { ja } from 'date-fns/locale'
 // タブの種類
 type TabType = 'physical' | 'max'
 
+// トースト通知の型
+type ToastType = 'success' | 'error'
+interface Toast {
+  id: number
+  type: ToastType
+  message: string
+}
+
 export default function KartePage() {
   const router = useRouter()
   const [user, setUser] = useState<Pick<User, 'id' | 'name' | 'role'> | null>(null)
@@ -23,6 +31,9 @@ export default function KartePage() {
   const [physicalRecords, setPhysicalRecords] = useState<PhysicalRecord[]>([])
   const [maxRecords, setMaxRecords] = useState<MaxTrainingRecord[]>([])
   const [loading, setLoading] = useState(true)
+
+  // トースト通知
+  const [toasts, setToasts] = useState<Toast[]>([])
 
   // 入力フォーム表示制御
   const [showForm, setShowForm] = useState(false)
@@ -42,7 +53,17 @@ export default function KartePage() {
 
   const [saving, setSaving] = useState(false)
 
-  // データ読み込み
+  // --- トースト通知ヘルパー ---
+  const showToast = useCallback((type: ToastType, message: string) => {
+    const id = Date.now()
+    setToasts(prev => [...prev, { id, type, message }])
+    // 3秒後に自動で消す
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id))
+    }, 3000)
+  }, [])
+
+  // --- データ読み込み ---
   const loadData = useCallback(async (userId: string) => {
     try {
       const [phys, max] = await Promise.all([
@@ -51,9 +72,13 @@ export default function KartePage() {
       ])
       setPhysicalRecords(phys)
       setMaxRecords(max)
-    } catch (e) { console.error(e) }
-    finally { setLoading(false) }
-  }, [])
+    } catch (e) {
+      console.error('[KartePage] データ読み込みエラー:', e)
+      showToast('error', 'データの読み込みに失敗しました')
+    } finally {
+      setLoading(false)
+    }
+  }, [showToast])
 
   useEffect(() => {
     const session = localStorage.getItem('rise_note_session')
@@ -64,7 +89,7 @@ export default function KartePage() {
     loadData(userData.id)
   }, [router, loadData])
 
-  // フォームリセット
+  // --- フォームリセット ---
   const resetForm = () => {
     setShowForm(false)
     setEditingId(null)
@@ -73,7 +98,7 @@ export default function KartePage() {
     setFormBench(''); setFormSquat(''); setFormDeadlift('')
   }
 
-  // 身体測定の編集開始
+  // --- 身体測定の編集開始 ---
   const startEditPhysical = (record: PhysicalRecord) => {
     setActiveTab('physical')
     setEditingId(record.id)
@@ -85,7 +110,7 @@ export default function KartePage() {
     setShowForm(true)
   }
 
-  // MAX測定の編集開始
+  // --- MAX測定の編集開始 ---
   const startEditMax = (record: MaxTrainingRecord) => {
     setActiveTab('max')
     setEditingId(record.id)
@@ -96,75 +121,144 @@ export default function KartePage() {
     setShowForm(true)
   }
 
-  // 保存処理
+  // --- 保存処理 ---
   const handleSave = async () => {
-    if (!user || !formDate) return
+    if (!user) return
+
+    // バリデーション: 測定日は必須
+    if (!formDate) {
+      showToast('error', '測定日を入力してください')
+      return
+    }
+
+    // バリデーション: 少なくとも1つの値が入力されていること
+    if (activeTab === 'physical') {
+      if (!formHeight && !formWeight && !formBodyFat && !formMuscle) {
+        showToast('error', '少なくとも1つの測定値を入力してください')
+        return
+      }
+    } else {
+      if (!formBench && !formSquat && !formDeadlift) {
+        showToast('error', '少なくとも1つの測定値を入力してください')
+        return
+      }
+    }
+
     setSaving(true)
     try {
       if (activeTab === 'physical') {
-        const saved = await savePhysicalRecord({
-          user_id: user.id,
-          measured_date: formDate,
-          height_cm: formHeight ? parseFloat(formHeight) : null,
-          weight_kg: formWeight ? parseFloat(formWeight) : null,
-          body_fat_pct: formBodyFat ? parseFloat(formBodyFat) : null,
-          muscle_mass_kg: formMuscle ? parseFloat(formMuscle) : null,
-        })
-        // 保存後にリスト更新（リロード不要）
+        // 編集時は editingId を渡してIDベースの更新を行う
+        const saved = await savePhysicalRecord(
+          {
+            user_id: user.id,
+            measured_date: formDate,
+            height_cm: formHeight ? parseFloat(formHeight) : null,
+            weight_kg: formWeight ? parseFloat(formWeight) : null,
+            body_fat_pct: formBodyFat ? parseFloat(formBodyFat) : null,
+            muscle_mass_kg: formMuscle ? parseFloat(formMuscle) : null,
+          },
+          editingId // 編集時は既存IDを渡す
+        )
+        // 保存後にローカルのリストを即時更新（グラフ・履歴に即反映）
         setPhysicalRecords(prev => {
-          const filtered = prev.filter(r => r.id !== saved.id && r.measured_date !== saved.measured_date)
+          const filtered = prev.filter(r => {
+            if (editingId && r.id === editingId) return false
+            if (r.id === saved.id) return false
+            if (r.measured_date === saved.measured_date) return false
+            return true
+          })
           return [...filtered, saved].sort((a, b) => a.measured_date.localeCompare(b.measured_date))
         })
+        showToast('success', editingId ? '身体測定データを更新しました' : '身体測定データを保存しました')
       } else {
-        const saved = await saveMaxTrainingRecord({
-          user_id: user.id,
-          measured_date: formDate,
-          bench_press_kg: formBench ? parseFloat(formBench) : null,
-          squat_kg: formSquat ? parseFloat(formSquat) : null,
-          deadlift_kg: formDeadlift ? parseFloat(formDeadlift) : null,
-        })
+        // MAX測定の保存
+        const saved = await saveMaxTrainingRecord(
+          {
+            user_id: user.id,
+            measured_date: formDate,
+            bench_press_kg: formBench ? parseFloat(formBench) : null,
+            squat_kg: formSquat ? parseFloat(formSquat) : null,
+            deadlift_kg: formDeadlift ? parseFloat(formDeadlift) : null,
+          },
+          editingId // 編集時は既存IDを渡す
+        )
         setMaxRecords(prev => {
-          const filtered = prev.filter(r => r.id !== saved.id && r.measured_date !== saved.measured_date)
+          const filtered = prev.filter(r => {
+            if (editingId && r.id === editingId) return false
+            if (r.id === saved.id) return false
+            if (r.measured_date === saved.measured_date) return false
+            return true
+          })
           return [...filtered, saved].sort((a, b) => a.measured_date.localeCompare(b.measured_date))
         })
+        showToast('success', editingId ? 'MAX測定データを更新しました' : 'MAX測定データを保存しました')
       }
       resetForm()
-    } catch (e) { console.error(e); alert('保存に失敗しました') }
-    finally { setSaving(false) }
+      // 保存成功後にサーバーから最新データを再取得（グラフ・履歴の整合性保証）
+      try {
+        const [phys, max] = await Promise.all([
+          getPhysicalRecords(user.id),
+          getMaxTrainingRecords(user.id),
+        ])
+        setPhysicalRecords(phys)
+        setMaxRecords(max)
+      } catch (reloadErr) {
+        console.warn('[KartePage] 保存後のデータ再取得に失敗 (ローカルデータは最新):', reloadErr)
+      }
+    } catch (e) {
+      console.error('[KartePage] 保存エラー:', e)
+      const errorMessage = e instanceof Error ? e.message : '不明なエラー'
+      // エラーメッセージが長すぎる場合は短縮
+      const displayMessage = errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage
+      showToast('error', `保存に失敗しました: ${displayMessage}`)
+    } finally {
+      setSaving(false)
+    }
   }
 
-  // 削除処理
+  // --- 削除処理 ---
   const handleDeletePhysical = async (record: PhysicalRecord) => {
-    if (!confirm(`${record.measured_date} の身体測定データを削除しますか?`)) return
+    if (!confirm(`${format(parseISO(record.measured_date), 'yyyy年M月d日', { locale: ja })} の身体測定データを削除しますか?`)) return
     try {
       await deletePhysicalRecord(record.id)
       setPhysicalRecords(prev => prev.filter(r => r.id !== record.id))
-    } catch (e) { console.error(e); alert('削除に失敗しました') }
+      showToast('success', '身体測定データを削除しました')
+    } catch (e) {
+      console.error('[KartePage] 削除エラー:', e)
+      const errorMessage = e instanceof Error ? e.message : '不明なエラー'
+      showToast('error', `削除に失敗しました: ${errorMessage}`)
+    }
   }
 
   const handleDeleteMax = async (record: MaxTrainingRecord) => {
-    if (!confirm(`${record.measured_date} のMAX測定データを削除しますか?`)) return
+    if (!confirm(`${format(parseISO(record.measured_date), 'yyyy年M月d日', { locale: ja })} のMAX測定データを削除しますか?`)) return
     try {
       await deleteMaxTrainingRecord(record.id)
       setMaxRecords(prev => prev.filter(r => r.id !== record.id))
-    } catch (e) { console.error(e); alert('削除に失敗しました') }
+      showToast('success', 'MAX測定データを削除しました')
+    } catch (e) {
+      console.error('[KartePage] 削除エラー:', e)
+      const errorMessage = e instanceof Error ? e.message : '不明なエラー'
+      showToast('error', `削除に失敗しました: ${errorMessage}`)
+    }
   }
 
-  // グラフ用データ
+  // --- グラフ用データ ---
   const physicalChartData = physicalRecords.map(r => ({
-    date: format(parseISO(r.measured_date), 'yy/M'),
+    date: format(parseISO(r.measured_date), 'yy/M/d'),
     '体重(kg)': r.weight_kg,
     '体脂肪率(%)': r.body_fat_pct,
     '筋肉量(kg)': r.muscle_mass_kg,
   }))
 
   const maxChartData = maxRecords.map(r => ({
-    date: format(parseISO(r.measured_date), 'yy/M'),
+    date: format(parseISO(r.measured_date), 'yy/M/d'),
     'ベンチプレス(kg)': r.bench_press_kg,
     'スクワット(kg)': r.squat_kg,
     'デッドリフト(kg)': r.deadlift_kg,
   }))
 
+  // --- ローディング表示 ---
   if (loading || !user) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -176,6 +270,25 @@ export default function KartePage() {
   return (
     <div className="min-h-screen bg-brand-bg pb-20 md:pb-8">
       <Header userName={user.name} role="player" />
+
+      {/* トースト通知 */}
+      <div className="fixed top-4 right-4 z-50 space-y-2">
+        {toasts.map(toast => (
+          <div
+            key={toast.id}
+            className={`px-4 py-3 rounded-xl shadow-lg text-sm font-medium animate-slide-in flex items-center gap-2 max-w-xs ${
+              toast.type === 'success'
+                ? 'bg-green-500 text-white'
+                : 'bg-red-500 text-white'
+            }`}
+            onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))}
+          >
+            <span>{toast.type === 'success' ? '✅' : '❌'}</span>
+            <span>{toast.message}</span>
+          </div>
+        ))}
+      </div>
+
       <main className="max-w-2xl mx-auto px-4 py-4 space-y-4">
         {/* ページタイトル */}
         <div className="bg-white rounded-2xl p-4 shadow-sm">
@@ -228,7 +341,7 @@ export default function KartePage() {
 
             {/* 測定日 */}
             <div>
-              <label className="block text-xs text-gray-500 mb-1">測定日</label>
+              <label className="block text-xs text-gray-500 mb-1">測定日 <span className="text-red-400">*</span></label>
               <input
                 type="date"
                 value={formDate}
@@ -297,7 +410,7 @@ export default function KartePage() {
                 disabled={saving || !formDate}
                 className="flex-1 bg-brand-main text-brand-dark font-bold py-2.5 rounded-xl hover:bg-yellow-400 transition-colors disabled:opacity-50 text-sm"
               >
-                {saving ? '保存中...' : '保存する'}
+                {saving ? '保存中...' : editingId ? '更新する' : '保存する'}
               </button>
               <button
                 onClick={resetForm}
@@ -320,9 +433,9 @@ export default function KartePage() {
                 <YAxis tick={{ fontSize: 11 }} />
                 <Tooltip contentStyle={{ borderRadius: '8px', fontSize: '12px' }} />
                 <Legend wrapperStyle={{ fontSize: '11px' }} />
-                <Line type="monotone" dataKey="体重(kg)" stroke="#e1c614" strokeWidth={2} dot={{ r: 4 }} />
-                <Line type="monotone" dataKey="体脂肪率(%)" stroke="#ef4444" strokeWidth={2} dot={{ r: 4 }} />
-                <Line type="monotone" dataKey="筋肉量(kg)" stroke="#22c55e" strokeWidth={2} dot={{ r: 4 }} />
+                <Line type="monotone" dataKey="体重(kg)" stroke="#e1c614" strokeWidth={2} dot={{ r: 4 }} connectNulls />
+                <Line type="monotone" dataKey="体脂肪率(%)" stroke="#ef4444" strokeWidth={2} dot={{ r: 4 }} connectNulls />
+                <Line type="monotone" dataKey="筋肉量(kg)" stroke="#22c55e" strokeWidth={2} dot={{ r: 4 }} connectNulls />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -338,9 +451,9 @@ export default function KartePage() {
                 <YAxis tick={{ fontSize: 11 }} />
                 <Tooltip contentStyle={{ borderRadius: '8px', fontSize: '12px' }} />
                 <Legend wrapperStyle={{ fontSize: '11px' }} />
-                <Line type="monotone" dataKey="ベンチプレス(kg)" stroke="#3b82f6" strokeWidth={2} dot={{ r: 4 }} />
-                <Line type="monotone" dataKey="スクワット(kg)" stroke="#e1c614" strokeWidth={2} dot={{ r: 4 }} />
-                <Line type="monotone" dataKey="デッドリフト(kg)" stroke="#ef4444" strokeWidth={2} dot={{ r: 4 }} />
+                <Line type="monotone" dataKey="ベンチプレス(kg)" stroke="#3b82f6" strokeWidth={2} dot={{ r: 4 }} connectNulls />
+                <Line type="monotone" dataKey="スクワット(kg)" stroke="#e1c614" strokeWidth={2} dot={{ r: 4 }} connectNulls />
+                <Line type="monotone" dataKey="デッドリフト(kg)" stroke="#ef4444" strokeWidth={2} dot={{ r: 4 }} connectNulls />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -358,7 +471,7 @@ export default function KartePage() {
           </div>
         )}
 
-        {/* 履歴リスト */}
+        {/* 履歴リスト: 身体測定 */}
         {activeTab === 'physical' && (
           <div className="bg-white rounded-2xl p-5 shadow-sm">
             <h3 className="text-sm font-semibold text-gray-700 mb-3">身体測定の記録一覧</h3>
@@ -408,6 +521,7 @@ export default function KartePage() {
           </div>
         )}
 
+        {/* 履歴リスト: MAX測定 */}
         {activeTab === 'max' && (
           <div className="bg-white rounded-2xl p-5 shadow-sm">
             <h3 className="text-sm font-semibold text-gray-700 mb-3">MAX測定の記録一覧</h3>
