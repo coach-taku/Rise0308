@@ -32,14 +32,16 @@ export default function MandalaPage() {
     if (userData.role === 'staff') { router.push('/coach/dashboard'); return }
     setUser(userData)
 
-    getMandalaChart(userData.id).then(chart => {
-      if (chart) {
-        setCoreGoal(chart.core_goal)
-        setElements(chart.elements)
-        setActions(chart.actions)
-      }
-      setLoading(false)
-    })
+    getMandalaChart(userData.id)
+      .then(chart => {
+        if (chart) {
+          setCoreGoal(chart.core_goal)
+          setElements(chart.elements)
+          setActions(chart.actions)
+        }
+      })
+      .catch(e => { console.error('[mandala] マンダラチャートの取得に失敗しました:', e) })
+      .finally(() => { setLoading(false) })
   }, [router])
 
   const handleSave = async () => {

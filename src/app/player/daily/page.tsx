@@ -42,28 +42,33 @@ export default function DailyInputPage() {
     const userData = JSON.parse(session)
     if (userData.role === 'staff') { router.push('/coach/dashboard'); return }
     setUser(userData)
-    getMandalaChart(userData.id).then(chart => { setMandala(chart); setLoading(false) })
+    getMandalaChart(userData.id)
+      .then(chart => { setMandala(chart) })
+      .catch(e => { console.error('[daily] マンダラチャートの取得に失敗しました:', e) })
+      .finally(() => { setLoading(false) })
   }, [router])
 
   useEffect(() => {
     if (!user) return
-    getDailyRecord(user.id, recordDate).then(record => {
-      if (record) {
-        setExistingRecord(true)
-        setSleepHours(record.sleep_hours)
-        setFatigueLevel(record.fatigue_level)
-        setHasPain(record.has_pain)
-        setPainDetail(record.pain_detail)
-        setParticipationStatus(record.participation_status)
-        setTargetItems(record.target_items)
-        setSelfEvaluation(record.self_evaluation)
-        setReflection(record.reflection)
-      } else {
-        setExistingRecord(false)
-        setSleepHours(7); setFatigueLevel(5); setHasPain(false); setPainDetail('')
-        setParticipationStatus('参加'); setTargetItems([]); setSelfEvaluation(5); setReflection('')
-      }
-    })
+    getDailyRecord(user.id, recordDate)
+      .then(record => {
+        if (record) {
+          setExistingRecord(true)
+          setSleepHours(record.sleep_hours)
+          setFatigueLevel(record.fatigue_level)
+          setHasPain(record.has_pain)
+          setPainDetail(record.pain_detail)
+          setParticipationStatus(record.participation_status)
+          setTargetItems(record.target_items)
+          setSelfEvaluation(record.self_evaluation)
+          setReflection(record.reflection)
+        } else {
+          setExistingRecord(false)
+          setSleepHours(7); setFatigueLevel(5); setHasPain(false); setPainDetail('')
+          setParticipationStatus('参加'); setTargetItems([]); setSelfEvaluation(5); setReflection('')
+        }
+      })
+      .catch(e => { console.error('[daily] 日次記録の取得に失敗しました:', e) })
   }, [user, recordDate])
 
   const allGoals: string[] = mandala
