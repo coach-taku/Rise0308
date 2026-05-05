@@ -172,8 +172,11 @@ export async function getUsers(): Promise<User[]> {
 
 export async function getUser(userId: string): Promise<User | null> {
   if (!isSupabaseConfigured()) return demoUsers.find(u => u.id === userId) || null
-  const { data, error } = await getSupabase().from('users').select('*').eq('id', userId).single()
-  if (error) return null
+  const { data, error } = await getSupabase().from('users').select('*').eq('id', userId).maybeSingle()
+  if (error) {
+    console.error('[data] getUser() でエラーが発生しました:', error.message)
+    return null
+  }
   return data
 }
 
@@ -189,17 +192,16 @@ export async function loginUser(name: string, password: string): Promise<User | 
       .select('*')
       .eq('name', name)
       .eq('password', password)
-      .single()
+      .maybeSingle()
     if (error) {
-      // PGRST116 は「0件」を意味するため合言葉誤りとして扱う（エラー扱いしない）
-      if (error.code !== 'PGRST116') {
-        console.error('[data] loginUser() でエラーが発生しました:', {
-          message: error.message,
-          code: error.code,
-        })
-      }
+      console.error('[data] loginUser() でエラーが発生しました:', {
+        message: error.message,
+        code: error.code,
+      })
       return null
     }
+    // data が null の場合は名前または合言葉が違う
+    if (!data) return null
     return data
   } catch (err) {
     console.error('[data] loginUser() で予期しないエラーが発生しました:', err)
@@ -229,8 +231,11 @@ export async function getActiveTournament(): Promise<Tournament | null> {
     .select('*')
     .order('target_date', { ascending: true })
     .limit(1)
-    .single()
-  if (error) return null
+    .maybeSingle()
+  if (error) {
+    console.error('[data] getActiveTournament() でエラーが発生しました:', error.message)
+    return null
+  }
   return data
 }
 
@@ -460,7 +465,10 @@ export async function getPhysicalRecords(userId: string): Promise<PhysicalRecord
     .select('*')
     .eq('user_id', userId)
     .order('measured_date')
-  if (error) throw error
+  if (error) {
+    console.error('[data] getPhysicalRecords() でエラーが発生しました:', error.message)
+    return []
+  }
   return data || []
 }
 
@@ -492,8 +500,14 @@ export async function savePhysicalRecord(
     .from('physical_records')
     .upsert(record, { onConflict: 'user_id,measured_date' })
     .select()
-    .single()
-  if (error) throw error
+    .maybeSingle()
+  if (error) {
+    console.error('[data] savePhysicalRecord() でエラーが発生しました:', error.message)
+    throw error
+  }
+  if (!data) {
+    throw new Error('身体測定データの保存結果を取得できませんでした')
+  }
   return data
 }
 
@@ -519,7 +533,10 @@ export async function getMaxTrainingRecords(userId: string): Promise<MaxTraining
     .select('*')
     .eq('user_id', userId)
     .order('measured_date')
-  if (error) throw error
+  if (error) {
+    console.error('[data] getMaxTrainingRecords() でエラーが発生しました:', error.message)
+    return []
+  }
   return data || []
 }
 
@@ -550,8 +567,14 @@ export async function saveMaxTrainingRecord(
     .from('max_training_records')
     .upsert(record, { onConflict: 'user_id,measured_date' })
     .select()
-    .single()
-  if (error) throw error
+    .maybeSingle()
+  if (error) {
+    console.error('[data] saveMaxTrainingRecord() でエラーが発生しました:', error.message)
+    throw error
+  }
+  if (!data) {
+    throw new Error('MAX測定データの保存結果を取得できませんでした')
+  }
   return data
 }
 

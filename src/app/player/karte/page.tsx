@@ -49,10 +49,15 @@ export default function KartePage() {
         getPhysicalRecords(userId),
         getMaxTrainingRecords(userId),
       ])
-      setPhysicalRecords(phys)
-      setMaxRecords(max)
-    } catch (e) { console.error(e) }
-    finally { setLoading(false) }
+      // データ未登録の場合は空配列が返るため、そのまま安全にセット
+      setPhysicalRecords(phys || [])
+      setMaxRecords(max || [])
+    } catch (e) {
+      console.error('[karte] データ読み込みに失敗しました:', e)
+      // エラー時も空配列をセットし「まだ記録がありません」表示にする
+      setPhysicalRecords([])
+      setMaxRecords([])
+    } finally { setLoading(false) }
   }, [])
 
   useEffect(() => {
