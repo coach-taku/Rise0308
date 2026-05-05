@@ -266,8 +266,11 @@ export async function getMandalaChart(userId: string): Promise<MandalaChart | nu
     .eq('user_id', userId)
     .order('created_at', { ascending: false })
     .limit(1)
-    .single()
-  if (error) return null
+    .maybeSingle()
+  if (error) {
+    console.error('[data] getMandalaChart() でエラーが発生しました:', error.message)
+    return null
+  }
   return data
 }
 
@@ -343,8 +346,11 @@ export async function getDailyRecord(userId: string, recordDate: string): Promis
     .select('*')
     .eq('user_id', userId)
     .eq('record_date', recordDate)
-    .single()
-  if (error) return null
+    .maybeSingle()
+  if (error) {
+    console.error('[data] getDailyRecord() でエラーが発生しました:', error.message)
+    return null
+  }
   return data
 }
 
