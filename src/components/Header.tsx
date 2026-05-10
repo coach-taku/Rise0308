@@ -1,14 +1,14 @@
 'use client'
 
 import { useRouter, usePathname } from 'next/navigation'
-import { logoutUser } from '@/lib/data'
+import { clearSession } from '@/lib/session'
 
 export default function Header({ userName, role }: { userName: string; role: 'player' | 'staff' }) {
   const router = useRouter()
   const pathname = usePathname()
 
-  const handleLogout = async () => {
-    await logoutUser()
+  const handleLogout = () => {
+    clearSession()
     router.push('/login')
   }
 

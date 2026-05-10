@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { User, Tournament, DailyRecord } from '@/types/database'
 import { getActiveTournament, getDailyRecords, getMandalaChart } from '@/lib/data'
+import { getSession } from '@/lib/session'
 import Header from '@/components/Header'
 import BottomNav from '@/components/BottomNav'
 import { AreaChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
@@ -18,11 +19,11 @@ export default function PlayerDashboard() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const session = localStorage.getItem('rise_note_session')
+    const session = getSession()
     if (!session) { router.push('/login'); return }
-    const userData = JSON.parse(session)
-    if (userData.role === 'staff') { router.push('/coach/dashboard'); return }
-    setUser(userData)
+    if (session.role === 'staff') { router.push('/coach/dashboard'); return }
+    setUser(session)
+    const userData = session
 
     const loadData = async () => {
       try {

@@ -2,15 +2,15 @@
 
 import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import { getSession } from '@/lib/session'
 
 export default function Home() {
   const router = useRouter()
 
   useEffect(() => {
-    const session = localStorage.getItem('rise_note_session')
+    const session = getSession()
     if (session) {
-      const user = JSON.parse(session)
-      if (user.role === 'staff') {
+      if (session.role === 'staff') {
         router.push('/coach/dashboard')
       } else {
         router.push('/player/dashboard')

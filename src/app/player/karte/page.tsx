@@ -7,6 +7,7 @@ import {
   getPhysicalRecords, savePhysicalRecord, deletePhysicalRecord,
   getMaxTrainingRecords, saveMaxTrainingRecord, deleteMaxTrainingRecord,
 } from '@/lib/data'
+import { getSession } from '@/lib/session'
 import Header from '@/components/Header'
 import BottomNav from '@/components/BottomNav'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
@@ -61,12 +62,11 @@ export default function KartePage() {
   }, [])
 
   useEffect(() => {
-    const session = localStorage.getItem('rise_note_session')
+    const session = getSession()
     if (!session) { router.push('/login'); return }
-    const userData = JSON.parse(session)
-    if (userData.role === 'staff') { router.push('/coach/dashboard'); return }
-    setUser(userData)
-    loadData(userData.id)
+    if (session.role === 'staff') { router.push('/coach/dashboard'); return }
+    setUser(session)
+    loadData(session.id)
   }, [router, loadData])
 
   // フォームリセット
