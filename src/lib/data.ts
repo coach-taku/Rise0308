@@ -217,6 +217,100 @@ export async function logoutUser(): Promise<void> {
   }
 }
 
+// ============================================================
+// ユーザー管理（管理者向けCRUD）
+// ============================================================
+
+/**
+ * 新規ユーザー（選手・スタッフ）を登録する
+ * 管理者画面からのみ呼び出す
+ */
+export async function createUser(
+  data: { name: string; role: 'player' | 'staff'; password: string; position?: string }
+): Promise<User> {
+  if (!isSupabaseConfigured()) {
+    const newUser: User = {
+      id: `user-${Date.now()}`,
+      name: data.name,
+      role: data.role,
+      password: data.password,
+      position: data.position || null,
+    }
+    demoUsers.push(newUser)
+    return newUser
+  }
+
+  const { data: created, error } = await getSupabase()
+    .from('users')
+    .insert({
+      name: data.name,
+      role: data.role,
+      password: data.password,
+      position: data.position || null,
+    })
+    .select()
+    .single()
+  if (error) {
+    console.error('[data] createUser() でエラーが発生しました:', error.message)
+    throw error
+  }
+  return created
+}
+
+/**
+ * 既存ユーザーの基本情報（名前・ポジション）を更新する
+ * 管理者画面からのみ呼び出す
+ */
+export async function updateUser(
+  userId: string,
+  updates: { name?: string; role?: 'player' | 'staff'; position?: string }
+): Promise<User> {
+  if (!isSupabaseConfigured()) {
+    const idx = demoUsers.findIndex(u => u.id === userId)
+    if (idx < 0) throw new Error('ユーザーが見つかりません')
+    demoUsers[idx] = { ...demoUsers[idx], ...updates }
+    return demoUsers[idx]
+  }
+
+  const { data: updated, error } = await getSupabase()
+    .from('users')
+    .update(updates)
+    .eq('id', userId)
+    .select()
+    .single()
+  if (error) {
+    console.error('[data] updateUser() でエラーが発生しました:', error.message)
+    throw error
+  }
+  return updated
+}
+
+/**
+ * 指定ユーザーのパスワードを変更する
+ * 管理者画面からのみ呼び出す
+ * Supabase ダッシュボードから直接カラムを書き換えた場合も次回ログイン時に反映される。
+ */
+export async function updateUserPassword(
+  userId: string,
+  newPassword: string
+): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    const idx = demoUsers.findIndex(u => u.id === userId)
+    if (idx < 0) throw new Error('ユーザーが見つかりません')
+    demoUsers[idx] = { ...demoUsers[idx], password: newPassword }
+    return
+  }
+
+  const { error } = await getSupabase()
+    .from('users')
+    .update({ password: newPassword })
+    .eq('id', userId)
+  if (error) {
+    console.error('[data] updateUserPassword() でエラーが発生しました:', error.message)
+    throw error
+  }
+}
+
 // ---------- Tournaments ----------
 
 export async function getTournaments(): Promise<Tournament[]> {

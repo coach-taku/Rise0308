@@ -10,8 +10,14 @@ CREATE TABLE IF NOT EXISTS users (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   name TEXT NOT NULL,
   role TEXT NOT NULL CHECK (role IN ('player', 'staff')),
-  password TEXT NOT NULL
+  password TEXT NOT NULL,
+  position TEXT  -- ポジション（選手の場合に使用。例: PG / SG / SF / PF / C）
 );
+
+-- 既存テーブルへの position カラム追加（既存環境向け ALTER TABLE）
+-- ※ CREATE TABLE IF NOT EXISTS で新規作成する場合は上記の定義が適用される
+-- ※ 既存の Supabase プロジェクトにこのマイグレーションを適用する場合は以下を実行
+-- ALTER TABLE users ADD COLUMN IF NOT EXISTS position TEXT;
 
 -- 2. Tournaments table
 CREATE TABLE IF NOT EXISTS tournaments (
@@ -93,3 +99,18 @@ CREATE INDEX IF NOT EXISTS idx_comments_record ON comments(daily_record_id);
 CREATE INDEX IF NOT EXISTS idx_mandala_user ON mandala_charts(user_id);
 CREATE INDEX IF NOT EXISTS idx_physical_records_user ON physical_records(user_id, measured_date);
 CREATE INDEX IF NOT EXISTS idx_max_training_records_user ON max_training_records(user_id, measured_date);
+
+-- ============================================================
+-- 2026-05-10 追加: セキュリティ機能強化（個別パスワード管理）
+-- ============================================================
+-- 既存の Supabase プロジェクトに position カラムを追加する場合は以下を実行
+-- （新規プロジェクトなら CREATE TABLE の定義に含まれているため不要）
+ALTER TABLE users ADD COLUMN IF NOT EXISTS position TEXT;
+
+-- ============================================================
+-- 参考: 管理者がダッシュボードからパスワードを直接書き換えた場合の動作
+-- ============================================================
+-- password カラムは平文テキストで保存しています。
+-- Supabase ダッシュボードの Table Editor から直接 password カラムを
+-- 書き換えることで、次回ログイン時からその値で認証されます。
+-- （アプリ側は毎回 DB の値をリアルタイムで照合するため即時反映されます）
