@@ -16,6 +16,7 @@ export default function Header({ userName, role }: { userName: string; role: 'pl
     ? [
         { href: '/coach/dashboard', label: 'チーム一覧' },
         { href: '/coach/tournament', label: '大会設定' },
+        { href: '/coach/users', label: 'ユーザー管理' },
       ]
     : [
         { href: '/player/dashboard', label: 'ホーム' },

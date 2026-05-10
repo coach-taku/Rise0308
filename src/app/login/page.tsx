@@ -55,7 +55,7 @@ export default function LoginPage() {
     e.preventDefault()
     setError('')
     if (!selectedName) { setError('名前を選択してください'); return }
-    if (!password) { setError('合言葉を入力してください'); return }
+    if (!password) { setError('パスワードを入力してください'); return }
 
     setLoading(true)
     try {
@@ -65,7 +65,7 @@ export default function LoginPage() {
         saveSession({ id: user.id, name: user.name, role: user.role })
         router.push(user.role === 'staff' ? '/coach/dashboard' : '/player/dashboard')
       } else {
-        setError('合言葉が正しくありません')
+        setError('パスワードが正しくありません')
       }
     } catch {
       setError('ログインに失敗しました。しばらくしてからもう一度お試しください。')
@@ -126,12 +126,12 @@ export default function LoginPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">合言葉</label>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">パスワード</label>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="チームの合言葉を入力"
+              placeholder="パスワードを入力"
               className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-brand-main focus:outline-none transition-colors bg-gray-50 text-base"
             />
           </div>
