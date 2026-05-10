@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { User, MandalaChart } from '@/types/database'
 import { getMandalaChart, saveMandalaChart } from '@/lib/data'
+import { getSession } from '@/lib/session'
 import Header from '@/components/Header'
 import BottomNav from '@/components/BottomNav'
 
@@ -26,13 +27,12 @@ export default function MandalaPage() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const session = localStorage.getItem('rise_note_session')
+    const session = getSession()
     if (!session) { router.push('/login'); return }
-    const userData = JSON.parse(session)
-    if (userData.role === 'staff') { router.push('/coach/dashboard'); return }
-    setUser(userData)
+    if (session.role === 'staff') { router.push('/coach/dashboard'); return }
+    setUser(session)
 
-    getMandalaChart(userData.id)
+    getMandalaChart(session.id)
       .then(chart => {
         if (chart) {
           setCoreGoal(chart.core_goal)

@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { getUsers, loginUser } from '@/lib/data'
 import { User } from '@/types/database'
+import { getSession, saveSession } from '@/lib/session'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -19,10 +20,10 @@ export default function LoginPage() {
 
   useEffect(() => {
     // すでにログイン済みであれば該当画面に遷移する
-    const session = localStorage.getItem('rise_note_session')
-    if (session) {
-      const user = JSON.parse(session) as User
-      router.push(user.role === 'staff' ? '/coach/dashboard' : '/player/dashboard')
+    // getSession() は UUID 形式の検証も行い、無効なセッションは自動削除する
+    const existingSession = getSession()
+    if (existingSession) {
+      router.push(existingSession.role === 'staff' ? '/coach/dashboard' : '/player/dashboard')
       return
     }
 
@@ -60,11 +61,8 @@ export default function LoginPage() {
     try {
       const user = await loginUser(selectedName, password)
       if (user) {
-        localStorage.setItem('rise_note_session', JSON.stringify({
-          id: user.id,
-          name: user.name,
-          role: user.role,
-        }))
+        // saveSession() は Supabase 接続時に UUID 形式を検証してから保存する
+        saveSession({ id: user.id, name: user.name, role: user.role })
         router.push(user.role === 'staff' ? '/coach/dashboard' : '/player/dashboard')
       } else {
         setError('合言葉が正しくありません')

@@ -210,6 +210,8 @@ export async function loginUser(name: string, password: string): Promise<User | 
 }
 
 export async function logoutUser(): Promise<void> {
+  // clearSession は session.ts に一元化されているが、
+  // data.ts 単体でも動作するようフォールバックを残す
   if (typeof window !== 'undefined') {
     localStorage.removeItem('rise_note_session')
   }

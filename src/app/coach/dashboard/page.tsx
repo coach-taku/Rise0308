@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { User, DailyRecordWithUser, Tournament } from '@/types/database'
 import { getUsers, getAllDailyRecords, getActiveTournament, addComment } from '@/lib/data'
+import { getSession } from '@/lib/session'
 import Header from '@/components/Header'
 import BottomNav from '@/components/BottomNav'
 import { format, parseISO, subDays } from 'date-fns'
@@ -24,11 +25,10 @@ export default function CoachDashboard() {
   const [activeTab, setActiveTab] = useState<'condition' | 'timeline' | 'growth'>('condition')
 
   useEffect(() => {
-    const session = localStorage.getItem('rise_note_session')
+    const session = getSession()
     if (!session) { router.push('/login'); return }
-    const userData = JSON.parse(session)
-    if (userData.role !== 'staff') { router.push('/player/dashboard'); return }
-    setUser(userData)
+    if (session.role !== 'staff') { router.push('/player/dashboard'); return }
+    setUser(session)
     loadData()
   }, [router])
 
