@@ -13,6 +13,7 @@ const playerNavItems = [
 const staffNavItems = [
   { href: '/coach/dashboard', label: 'チーム', icon: '📊' },
   { href: '/coach/tournament', label: '大会設定', icon: '🏆' },
+  { href: '/coach/users', label: 'ユーザー管理', icon: '👥' },
 ]
 
 export default function BottomNav({ role }: { role: 'player' | 'staff' }) {

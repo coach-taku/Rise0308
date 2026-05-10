@@ -7,6 +7,7 @@ export interface User {
   name: string
   role: 'player' | 'staff'
   password: string
+  position?: string | null  // ポジション（選手の場合）
 }
 
 export interface Tournament {
