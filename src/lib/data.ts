@@ -682,3 +682,49 @@ export async function deleteMaxTrainingRecord(recordId: string): Promise<void> {
   const { error } = await getSupabase().from('max_training_records').delete().eq('id', recordId)
   if (error) throw error
 }
+
+// ============================================================
+// チームダッシュボード用（疲労度・睡眠時間の平均値集計）
+// ============================================================
+
+/**
+ * 指定した複数選手の過去21日間（直近3週間）のデイリーレコードを取得する。
+ * コーチ向けチームダッシュボードのグラフ描画に使用する。
+ * @param userIds  対象選手のIDリスト
+ * @param startDate 取得開始日（YYYY-MM-DD）
+ * @param endDate   取得終了日（YYYY-MM-DD）
+ */
+export async function getTeamConditionRecords(
+  userIds: string[],
+  startDate: string,
+  endDate: string
+): Promise<DailyRecord[]> {
+  if (userIds.length === 0) return []
+
+  // デモモードの場合はインメモリデータから絞り込む
+  if (!isSupabaseConfigured()) {
+    return demoRecords.filter(
+      r =>
+        userIds.includes(r.user_id) &&
+        r.record_date >= startDate &&
+        r.record_date <= endDate
+    ).sort((a, b) => a.record_date.localeCompare(b.record_date))
+  }
+
+  // Supabase から対象選手・期間のデータを取得する
+  const { data, error } = await getSupabase()
+    .from('daily_records')
+    .select('*')
+    .in('user_id', userIds)
+    .gte('record_date', startDate)
+    .lte('record_date', endDate)
+    .order('record_date', { ascending: true })
+
+  if (error) {
+    console.error('[data] getTeamConditionRecords() でエラーが発生しました:', error.message)
+    return []
+  }
+  return data || []
+}
+
+
