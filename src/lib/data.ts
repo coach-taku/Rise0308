@@ -684,6 +684,77 @@ export async function deleteMaxTrainingRecord(recordId: string): Promise<void> {
 }
 
 // ============================================================
+// カルテ機能（管理者向け：全選手データ取得）
+// ============================================================
+
+/**
+ * 全選手の身体測定データを取得する（管理者向け）
+ * user_id ごとにグループ化せず全件返す
+ */
+export async function getAllPhysicalRecords(): Promise<PhysicalRecord[]> {
+  // デモモードでは全デモデータを返す
+  if (!isSupabaseConfigured()) {
+    // デモ用：複数選手分のデータを生成して返す
+    const extraRecords: PhysicalRecord[] = [
+      { id: 'phys-p2-1', user_id: 'player-2', measured_date: '2025-10-01', height_cm: 162.0, weight_kg: 55.0, body_fat_pct: 24.0, muscle_mass_kg: 39.0, created_at: '2025-10-01T00:00:00Z' },
+      { id: 'phys-p2-2', user_id: 'player-2', measured_date: '2026-01-05', height_cm: 162.5, weight_kg: 54.0, body_fat_pct: 22.5, muscle_mass_kg: 39.5, created_at: '2026-01-05T00:00:00Z' },
+      { id: 'phys-p2-3', user_id: 'player-2', measured_date: '2026-04-01', height_cm: 163.0, weight_kg: 53.5, body_fat_pct: 21.0, muscle_mass_kg: 40.0, created_at: '2026-04-01T00:00:00Z' },
+      { id: 'phys-p3-1', user_id: 'player-3', measured_date: '2025-10-01', height_cm: 170.0, weight_kg: 63.0, body_fat_pct: 18.0, muscle_mass_kg: 48.0, created_at: '2025-10-01T00:00:00Z' },
+      { id: 'phys-p3-2', user_id: 'player-3', measured_date: '2026-01-05', height_cm: 170.0, weight_kg: 62.0, body_fat_pct: 17.0, muscle_mass_kg: 49.0, created_at: '2026-01-05T00:00:00Z' },
+      { id: 'phys-p3-3', user_id: 'player-3', measured_date: '2026-04-01', height_cm: 170.5, weight_kg: 61.5, body_fat_pct: 16.0, muscle_mass_kg: 50.0, created_at: '2026-04-01T00:00:00Z' },
+      { id: 'phys-p4-1', user_id: 'player-4', measured_date: '2025-10-01', height_cm: 158.0, weight_kg: 52.0, body_fat_pct: 26.0, muscle_mass_kg: 36.0, created_at: '2025-10-01T00:00:00Z' },
+      { id: 'phys-p4-2', user_id: 'player-4', measured_date: '2026-01-05', height_cm: 158.0, weight_kg: 51.5, body_fat_pct: 24.5, muscle_mass_kg: 36.5, created_at: '2026-01-05T00:00:00Z' },
+      { id: 'phys-p4-3', user_id: 'player-4', measured_date: '2026-04-01', height_cm: 158.5, weight_kg: 50.5, body_fat_pct: 23.0, muscle_mass_kg: 37.5, created_at: '2026-04-01T00:00:00Z' },
+    ]
+    return [...demoPhysicalRecords, ...extraRecords].sort(
+      (a, b) => a.measured_date.localeCompare(b.measured_date)
+    )
+  }
+
+  const { data, error } = await getSupabase()
+    .from('physical_records')
+    .select('*')
+    .order('measured_date', { ascending: true })
+  if (error) {
+    console.error('[data] getAllPhysicalRecords() でエラーが発生しました:', error.message)
+    return []
+  }
+  return data || []
+}
+
+/**
+ * 全選手のMAX測定データを取得する（管理者向け）
+ */
+export async function getAllMaxTrainingRecords(): Promise<MaxTrainingRecord[]> {
+  if (!isSupabaseConfigured()) {
+    const extraRecords: MaxTrainingRecord[] = [
+      { id: 'max-p2-1', user_id: 'player-2', measured_date: '2025-10-01', bench_press_kg: 25.0, squat_kg: 45.0, deadlift_kg: 55.0, created_at: '2025-10-01T00:00:00Z' },
+      { id: 'max-p2-2', user_id: 'player-2', measured_date: '2026-01-05', bench_press_kg: 27.5, squat_kg: 47.5, deadlift_kg: 57.5, created_at: '2026-01-05T00:00:00Z' },
+      { id: 'max-p2-3', user_id: 'player-2', measured_date: '2026-04-01', bench_press_kg: 30.0, squat_kg: 50.0, deadlift_kg: 60.0, created_at: '2026-04-01T00:00:00Z' },
+      { id: 'max-p3-1', user_id: 'player-3', measured_date: '2025-10-01', bench_press_kg: 50.0, squat_kg: 75.0, deadlift_kg: 90.0, created_at: '2025-10-01T00:00:00Z' },
+      { id: 'max-p3-2', user_id: 'player-3', measured_date: '2026-01-05', bench_press_kg: 55.0, squat_kg: 80.0, deadlift_kg: 95.0, created_at: '2026-01-05T00:00:00Z' },
+      { id: 'max-p3-3', user_id: 'player-3', measured_date: '2026-04-01', bench_press_kg: 60.0, squat_kg: 85.0, deadlift_kg: 100.0, created_at: '2026-04-01T00:00:00Z' },
+      { id: 'max-p4-1', user_id: 'player-4', measured_date: '2025-10-01', bench_press_kg: 20.0, squat_kg: 35.0, deadlift_kg: 45.0, created_at: '2025-10-01T00:00:00Z' },
+      { id: 'max-p4-2', user_id: 'player-4', measured_date: '2026-01-05', bench_press_kg: 22.5, squat_kg: 37.5, deadlift_kg: 47.5, created_at: '2026-01-05T00:00:00Z' },
+      { id: 'max-p4-3', user_id: 'player-4', measured_date: '2026-04-01', bench_press_kg: 25.0, squat_kg: 40.0, deadlift_kg: 50.0, created_at: '2026-04-01T00:00:00Z' },
+    ]
+    return [...demoMaxRecords, ...extraRecords].sort(
+      (a, b) => a.measured_date.localeCompare(b.measured_date)
+    )
+  }
+
+  const { data, error } = await getSupabase()
+    .from('max_training_records')
+    .select('*')
+    .order('measured_date', { ascending: true })
+  if (error) {
+    console.error('[data] getAllMaxTrainingRecords() でエラーが発生しました:', error.message)
+    return []
+  }
+  return data || []
+}
+
+// ============================================================
 // チームダッシュボード用（疲労度・睡眠時間の平均値集計）
 // ============================================================
 

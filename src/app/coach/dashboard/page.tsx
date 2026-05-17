@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { User, DailyRecord, DailyRecordWithUser, Tournament } from '@/types/database'
-import { getUsers, getAllDailyRecords, getActiveTournament, addComment, getTeamConditionRecords } from '@/lib/data'
+import { User, DailyRecord, DailyRecordWithUser, Tournament, PhysicalRecord, MaxTrainingRecord } from '@/types/database'
+import { getUsers, getAllDailyRecords, getActiveTournament, addComment, getTeamConditionRecords, getAllPhysicalRecords, getAllMaxTrainingRecords } from '@/lib/data'
 import { getSession } from '@/lib/session'
 import Header from '@/components/Header'
 import BottomNav from '@/components/BottomNav'
@@ -80,7 +80,14 @@ export default function CoachDashboard() {
   const [commentInputs, setCommentInputs] = useState<Record<string, string>>({})
   const [showComments, setShowComments] = useState<Record<string, boolean>>({})
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<'condition' | 'timeline' | 'growth' | 'team'>('condition')
+  const [activeTab, setActiveTab] = useState<'condition' | 'timeline' | 'growth' | 'team' | 'karte'>('condition')
+
+  // ---- カルテタブ用 state ----
+  const [allPhysicalRecords, setAllPhysicalRecords] = useState<PhysicalRecord[]>([])
+  const [allMaxRecords, setAllMaxRecords] = useState<MaxTrainingRecord[]>([])
+  const [karteLoading, setKarteLoading] = useState(false)
+  const [selectedKartePlayerId, setSelectedKartePlayerId] = useState<string | null>(null)
+  const [karteTab, setKarteTab] = useState<'physical' | 'max'>('physical')
 
   // ---- チームダッシュボード用 state ----
   const [selectedPlayerIds, setSelectedPlayerIds] = useState<string[]>([])
@@ -144,6 +151,29 @@ export default function CoachDashboard() {
       loadTeamRecords(selectedPlayerIds)
     }
   }, [activeTab, selectedPlayerIds, loadTeamRecords])
+
+  /** カルテタブがアクティブになったときにデータを取得する */
+  const loadKarteData = useCallback(async () => {
+    setKarteLoading(true)
+    try {
+      const [phys, max] = await Promise.all([
+        getAllPhysicalRecords(),
+        getAllMaxTrainingRecords(),
+      ])
+      setAllPhysicalRecords(phys)
+      setAllMaxRecords(max)
+    } catch (e) {
+      console.error('[KarteDashboard] データ取得エラー:', e)
+    } finally {
+      setKarteLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (activeTab === 'karte') {
+      loadKarteData()
+    }
+  }, [activeTab, loadKarteData])
 
   const handleDateChange = (date: string) => {
     setSelectedDate(date)
@@ -232,8 +262,8 @@ export default function CoachDashboard() {
                 : '大会未設定'}
             </p>
           </div>
-          {/* チーム推移タブでは日付セレクターを非表示 */}
-          {activeTab !== 'team' && (
+          {/* チーム推移・カルテタブでは日付セレクターを非表示 */}
+          {activeTab !== 'team' && activeTab !== 'karte' && (
             <input
               type="date"
               value={selectedDate}
@@ -250,6 +280,7 @@ export default function CoachDashboard() {
             { key: 'timeline',  label: 'タイムライン',   icon: '📝' },
             { key: 'growth',    label: '成長・達成度',   icon: '📈' },
             { key: 'team',      label: 'チーム推移',     icon: '📊' },
+            { key: 'karte',     label: 'カルテ',         icon: '📋' },
           ] as const).map(tab => (
             <button
               key={tab.key}
@@ -706,8 +737,420 @@ export default function CoachDashboard() {
           </div>
         )}
 
+        {/* ====== カルテタブ ====== */}
+        {activeTab === 'karte' && (
+          <KarteTab
+            players={players}
+            allPhysicalRecords={allPhysicalRecords}
+            allMaxRecords={allMaxRecords}
+            loading={karteLoading}
+            selectedPlayerId={selectedKartePlayerId}
+            onSelectPlayer={setSelectedKartePlayerId}
+            karteTab={karteTab}
+            onKarteTabChange={setKarteTab}
+          />
+        )}
+
       </main>
       <BottomNav role="staff" />
+    </div>
+  )
+}
+
+// ============================================================
+// カルテタブ コンポーネント
+// ============================================================
+
+/** 測定日ラベルを短く整形する（例: 2026-04-01 → 26/4） */
+function formatMeasuredDate(dateStr: string): string {
+  const d = new Date(dateStr)
+  return `${String(d.getFullYear()).slice(2)}/${d.getMonth() + 1}`
+}
+
+/** 数値配列の平均を計算する（null/undefined を除外） */
+function avg(values: (number | null | undefined)[]): number | null {
+  const valid = values.filter((v): v is number => v !== null && v !== undefined)
+  if (valid.length === 0) return null
+  return Math.round((valid.reduce((s, v) => s + v, 0) / valid.length) * 10) / 10
+}
+
+interface KarteTabProps {
+  players: User[]
+  allPhysicalRecords: PhysicalRecord[]
+  allMaxRecords: MaxTrainingRecord[]
+  loading: boolean
+  selectedPlayerId: string | null
+  onSelectPlayer: (id: string | null) => void
+  karteTab: 'physical' | 'max'
+  onKarteTabChange: (tab: 'physical' | 'max') => void
+}
+
+function KarteTab({
+  players,
+  allPhysicalRecords,
+  allMaxRecords,
+  loading,
+  selectedPlayerId,
+  onSelectPlayer,
+  karteTab,
+  onKarteTabChange,
+}: KarteTabProps) {
+  // 表示対象の選手データ
+  const selectedPlayer = players.find(p => p.id === selectedPlayerId)
+
+  // 選択選手の個人データ
+  const personalPhysical = allPhysicalRecords
+    .filter(r => r.user_id === selectedPlayerId)
+    .sort((a, b) => a.measured_date.localeCompare(b.measured_date))
+  const personalMax = allMaxRecords
+    .filter(r => r.user_id === selectedPlayerId)
+    .sort((a, b) => a.measured_date.localeCompare(b.measured_date))
+
+  // 測定日の全ユニークリストを取得する（チーム平均の基準日）
+  const allPhysicalDates = Array.from(new Set(allPhysicalRecords.map(r => r.measured_date))).sort()
+  const allMaxDates = Array.from(new Set(allMaxRecords.map(r => r.measured_date))).sort()
+
+  // チーム平均を日付ごとに計算（身体測定）
+  const teamPhysicalAvg = allPhysicalDates.map(date => {
+    const dayRecords = allPhysicalRecords.filter(r => r.measured_date === date)
+    return {
+      date: formatMeasuredDate(date),
+      rawDate: date,
+      'チーム平均_体重': avg(dayRecords.map(r => r.weight_kg)),
+      'チーム平均_体脂肪率': avg(dayRecords.map(r => r.body_fat_pct)),
+      'チーム平均_筋肉量': avg(dayRecords.map(r => r.muscle_mass_kg)),
+    }
+  })
+
+  // チーム平均を日付ごとに計算（MAX測定）
+  const teamMaxAvg = allMaxDates.map(date => {
+    const dayRecords = allMaxRecords.filter(r => r.measured_date === date)
+    return {
+      date: formatMeasuredDate(date),
+      rawDate: date,
+      'チーム平均_ベンチプレス': avg(dayRecords.map(r => r.bench_press_kg)),
+      'チーム平均_スクワット': avg(dayRecords.map(r => r.squat_kg)),
+      'チーム平均_デッドリフト': avg(dayRecords.map(r => r.deadlift_kg)),
+    }
+  })
+
+  // 個人 + チーム平均のグラフデータをマージする（身体測定）
+  const physicalChartData = allPhysicalDates.map(date => {
+    const personalRec = personalPhysical.find(r => r.measured_date === date)
+    const teamRec = teamPhysicalAvg.find(r => r.rawDate === date)
+    return {
+      date: formatMeasuredDate(date),
+      '個人_体重': personalRec?.weight_kg ?? null,
+      '個人_体脂肪率': personalRec?.body_fat_pct ?? null,
+      '個人_筋肉量': personalRec?.muscle_mass_kg ?? null,
+      'チーム平均_体重': teamRec?.['チーム平均_体重'] ?? null,
+      'チーム平均_体脂肪率': teamRec?.['チーム平均_体脂肪率'] ?? null,
+      'チーム平均_筋肉量': teamRec?.['チーム平均_筋肉量'] ?? null,
+    }
+  })
+
+  // 個人 + チーム平均のグラフデータをマージする（MAX測定）
+  const maxChartData = allMaxDates.map(date => {
+    const personalRec = personalMax.find(r => r.measured_date === date)
+    const teamRec = teamMaxAvg.find(r => r.rawDate === date)
+    return {
+      date: formatMeasuredDate(date),
+      '個人_ベンチプレス': personalRec?.bench_press_kg ?? null,
+      '個人_スクワット': personalRec?.squat_kg ?? null,
+      '個人_デッドリフト': personalRec?.deadlift_kg ?? null,
+      'チーム平均_ベンチプレス': teamRec?.['チーム平均_ベンチプレス'] ?? null,
+      'チーム平均_スクワット': teamRec?.['チーム平均_スクワット'] ?? null,
+      'チーム平均_デッドリフト': teamRec?.['チーム平均_デッドリフト'] ?? null,
+    }
+  })
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <div className="animate-pulse text-brand-main font-bold">データ読み込み中...</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+
+      {/* ---- 選手選択パネル ---- */}
+      <div className="bg-white rounded-2xl p-4 shadow-sm">
+        <h3 className="text-sm font-bold text-gray-700 mb-3">📋 選手を選択してカルテを閲覧</h3>
+        {players.length === 0 ? (
+          <p className="text-xs text-gray-400">選手が登録されていません</p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {players.map(player => {
+              const isSelected = selectedPlayerId === player.id
+              return (
+                <button
+                  key={player.id}
+                  onClick={() => onSelectPlayer(isSelected ? null : player.id)}
+                  className={`px-3 py-1.5 rounded-xl border text-sm font-medium transition-all ${
+                    isSelected
+                      ? 'bg-brand-main border-yellow-400 text-brand-dark shadow-md'
+                      : 'bg-white border-gray-200 text-gray-600 hover:border-gray-400'
+                  }`}
+                >
+                  {player.name}
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* ---- 選手未選択時 ---- */}
+      {!selectedPlayerId && (
+        <div className="bg-white rounded-2xl p-10 shadow-sm text-center text-gray-400">
+          <p className="text-3xl mb-2">👆</p>
+          <p className="text-sm">上のリストから選手を選んでカルテを表示します</p>
+        </div>
+      )}
+
+      {/* ---- 選手選択済み ---- */}
+      {selectedPlayer && (
+        <>
+          {/* 選手名ヘッダー */}
+          <div className="bg-white rounded-2xl p-4 shadow-sm flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-brand-main flex items-center justify-center text-brand-dark font-bold text-lg">
+              {selectedPlayer.name.charAt(0)}
+            </div>
+            <div>
+              <p className="font-bold text-gray-800">{selectedPlayer.name}</p>
+              <p className="text-xs text-gray-400">{selectedPlayer.position || 'ポジション未設定'}</p>
+            </div>
+          </div>
+
+          {/* INBODY / MAX タブ切り替え */}
+          <div className="flex gap-2">
+            <button
+              onClick={() => onKarteTabChange('physical')}
+              className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                karteTab === 'physical'
+                  ? 'bg-brand-main text-brand-dark shadow-md'
+                  : 'bg-white text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              INBODY測定
+            </button>
+            <button
+              onClick={() => onKarteTabChange('max')}
+              className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                karteTab === 'max'
+                  ? 'bg-brand-main text-brand-dark shadow-md'
+                  : 'bg-white text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              MAX測定
+            </button>
+          </div>
+
+          {/* ---- INBODY測定 ---- */}
+          {karteTab === 'physical' && (
+            <div className="space-y-4">
+              {/* 一覧表 */}
+              <div className="bg-white rounded-2xl p-4 shadow-sm">
+                <h3 className="text-sm font-bold text-gray-700 mb-3">📏 INBODY測定 一覧</h3>
+                {personalPhysical.length === 0 ? (
+                  <p className="text-sm text-gray-400 text-center py-6">まだ記録がありません</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs text-center">
+                      <thead>
+                        <tr className="border-b border-gray-100">
+                          <th className="py-2 px-2 text-gray-500 text-left">測定日</th>
+                          <th className="py-2 px-2 text-gray-500">身長(cm)</th>
+                          <th className="py-2 px-2 text-gray-500">体重(kg)</th>
+                          <th className="py-2 px-2 text-gray-500">体脂肪(%)</th>
+                          <th className="py-2 px-2 text-gray-500">筋肉量(kg)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[...personalPhysical].reverse().map(r => (
+                          <tr key={r.id} className="border-b border-gray-50 hover:bg-gray-50">
+                            <td className="py-2 px-2 text-left font-medium text-gray-700">
+                              {r.measured_date}
+                            </td>
+                            <td className="py-2 px-2 text-gray-800">{r.height_cm ?? '-'}</td>
+                            <td className="py-2 px-2 text-gray-800">{r.weight_kg ?? '-'}</td>
+                            <td className="py-2 px-2 text-gray-800">{r.body_fat_pct ?? '-'}</td>
+                            <td className="py-2 px-2 text-gray-800">{r.muscle_mass_kg ?? '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* グラフ（2件以上あるとき表示） */}
+              {physicalChartData.length >= 2 && (
+                <>
+                  {/* 体重グラフ */}
+                  <div className="bg-white rounded-2xl p-4 shadow-sm">
+                    <h3 className="text-sm font-bold text-gray-700 mb-1">⚖️ 体重の推移</h3>
+                    <p className="text-xs text-gray-400 mb-3">実線: 個人 ／ 破線: チーム平均</p>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <LineChart data={physicalChartData} margin={{ top: 5, right: 10, left: -15, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                        <YAxis tick={{ fontSize: 11 }} />
+                        <Tooltip contentStyle={{ borderRadius: '8px', fontSize: '12px' }} formatter={(v) => [`${v} kg`, '']} />
+                        <Legend wrapperStyle={{ fontSize: '11px' }} />
+                        <Line type="monotone" dataKey="個人_体重" name="個人" stroke="#e1c614" strokeWidth={2.5} dot={{ r: 4 }} connectNulls={false} />
+                        <Line type="monotone" dataKey="チーム平均_体重" name="チーム平均" stroke="#e1c614" strokeWidth={1.5} strokeDasharray="5 3" dot={{ r: 3 }} connectNulls={false} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {/* 体脂肪率グラフ */}
+                  <div className="bg-white rounded-2xl p-4 shadow-sm">
+                    <h3 className="text-sm font-bold text-gray-700 mb-1">🔥 体脂肪率の推移</h3>
+                    <p className="text-xs text-gray-400 mb-3">実線: 個人 ／ 破線: チーム平均</p>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <LineChart data={physicalChartData} margin={{ top: 5, right: 10, left: -15, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                        <YAxis tick={{ fontSize: 11 }} />
+                        <Tooltip contentStyle={{ borderRadius: '8px', fontSize: '12px' }} formatter={(v) => [`${v} %`, '']} />
+                        <Legend wrapperStyle={{ fontSize: '11px' }} />
+                        <Line type="monotone" dataKey="個人_体脂肪率" name="個人" stroke="#ef4444" strokeWidth={2.5} dot={{ r: 4 }} connectNulls={false} />
+                        <Line type="monotone" dataKey="チーム平均_体脂肪率" name="チーム平均" stroke="#ef4444" strokeWidth={1.5} strokeDasharray="5 3" dot={{ r: 3 }} connectNulls={false} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {/* 筋肉量グラフ */}
+                  <div className="bg-white rounded-2xl p-4 shadow-sm">
+                    <h3 className="text-sm font-bold text-gray-700 mb-1">💪 筋肉量の推移</h3>
+                    <p className="text-xs text-gray-400 mb-3">実線: 個人 ／ 破線: チーム平均</p>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <LineChart data={physicalChartData} margin={{ top: 5, right: 10, left: -15, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                        <YAxis tick={{ fontSize: 11 }} />
+                        <Tooltip contentStyle={{ borderRadius: '8px', fontSize: '12px' }} formatter={(v) => [`${v} kg`, '']} />
+                        <Legend wrapperStyle={{ fontSize: '11px' }} />
+                        <Line type="monotone" dataKey="個人_筋肉量" name="個人" stroke="#22c55e" strokeWidth={2.5} dot={{ r: 4 }} connectNulls={false} />
+                        <Line type="monotone" dataKey="チーム平均_筋肉量" name="チーム平均" stroke="#22c55e" strokeWidth={1.5} strokeDasharray="5 3" dot={{ r: 3 }} connectNulls={false} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </>
+              )}
+
+              {physicalChartData.length === 1 && (
+                <div className="bg-white rounded-2xl p-5 shadow-sm text-center">
+                  <p className="text-sm text-gray-400">グラフを表示するには2回以上の記録が必要です</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ---- MAX測定 ---- */}
+          {karteTab === 'max' && (
+            <div className="space-y-4">
+              {/* 一覧表 */}
+              <div className="bg-white rounded-2xl p-4 shadow-sm">
+                <h3 className="text-sm font-bold text-gray-700 mb-3">🏋️ MAX測定 一覧</h3>
+                {personalMax.length === 0 ? (
+                  <p className="text-sm text-gray-400 text-center py-6">まだ記録がありません</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs text-center">
+                      <thead>
+                        <tr className="border-b border-gray-100">
+                          <th className="py-2 px-2 text-gray-500 text-left">測定日</th>
+                          <th className="py-2 px-2 text-gray-500">ベンチ(kg)</th>
+                          <th className="py-2 px-2 text-gray-500">スクワット(kg)</th>
+                          <th className="py-2 px-2 text-gray-500">デッド(kg)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[...personalMax].reverse().map(r => (
+                          <tr key={r.id} className="border-b border-gray-50 hover:bg-gray-50">
+                            <td className="py-2 px-2 text-left font-medium text-gray-700">
+                              {r.measured_date}
+                            </td>
+                            <td className="py-2 px-2 text-gray-800">{r.bench_press_kg ?? '-'}</td>
+                            <td className="py-2 px-2 text-gray-800">{r.squat_kg ?? '-'}</td>
+                            <td className="py-2 px-2 text-gray-800">{r.deadlift_kg ?? '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* グラフ（2件以上あるとき表示） */}
+              {maxChartData.length >= 2 && (
+                <>
+                  {/* ベンチプレスグラフ */}
+                  <div className="bg-white rounded-2xl p-4 shadow-sm">
+                    <h3 className="text-sm font-bold text-gray-700 mb-1">🔵 ベンチプレスの推移</h3>
+                    <p className="text-xs text-gray-400 mb-3">実線: 個人 ／ 破線: チーム平均</p>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <LineChart data={maxChartData} margin={{ top: 5, right: 10, left: -15, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                        <YAxis tick={{ fontSize: 11 }} />
+                        <Tooltip contentStyle={{ borderRadius: '8px', fontSize: '12px' }} formatter={(v) => [`${v} kg`, '']} />
+                        <Legend wrapperStyle={{ fontSize: '11px' }} />
+                        <Line type="monotone" dataKey="個人_ベンチプレス" name="個人" stroke="#3b82f6" strokeWidth={2.5} dot={{ r: 4 }} connectNulls={false} />
+                        <Line type="monotone" dataKey="チーム平均_ベンチプレス" name="チーム平均" stroke="#3b82f6" strokeWidth={1.5} strokeDasharray="5 3" dot={{ r: 3 }} connectNulls={false} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {/* スクワットグラフ */}
+                  <div className="bg-white rounded-2xl p-4 shadow-sm">
+                    <h3 className="text-sm font-bold text-gray-700 mb-1">🟡 スクワットの推移</h3>
+                    <p className="text-xs text-gray-400 mb-3">実線: 個人 ／ 破線: チーム平均</p>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <LineChart data={maxChartData} margin={{ top: 5, right: 10, left: -15, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                        <YAxis tick={{ fontSize: 11 }} />
+                        <Tooltip contentStyle={{ borderRadius: '8px', fontSize: '12px' }} formatter={(v) => [`${v} kg`, '']} />
+                        <Legend wrapperStyle={{ fontSize: '11px' }} />
+                        <Line type="monotone" dataKey="個人_スクワット" name="個人" stroke="#e1c614" strokeWidth={2.5} dot={{ r: 4 }} connectNulls={false} />
+                        <Line type="monotone" dataKey="チーム平均_スクワット" name="チーム平均" stroke="#e1c614" strokeWidth={1.5} strokeDasharray="5 3" dot={{ r: 3 }} connectNulls={false} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {/* デッドリフトグラフ */}
+                  <div className="bg-white rounded-2xl p-4 shadow-sm">
+                    <h3 className="text-sm font-bold text-gray-700 mb-1">🔴 デッドリフトの推移</h3>
+                    <p className="text-xs text-gray-400 mb-3">実線: 個人 ／ 破線: チーム平均</p>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <LineChart data={maxChartData} margin={{ top: 5, right: 10, left: -15, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                        <YAxis tick={{ fontSize: 11 }} />
+                        <Tooltip contentStyle={{ borderRadius: '8px', fontSize: '12px' }} formatter={(v) => [`${v} kg`, '']} />
+                        <Legend wrapperStyle={{ fontSize: '11px' }} />
+                        <Line type="monotone" dataKey="個人_デッドリフト" name="個人" stroke="#ef4444" strokeWidth={2.5} dot={{ r: 4 }} connectNulls={false} />
+                        <Line type="monotone" dataKey="チーム平均_デッドリフト" name="チーム平均" stroke="#ef4444" strokeWidth={1.5} strokeDasharray="5 3" dot={{ r: 3 }} connectNulls={false} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </>
+              )}
+
+              {maxChartData.length === 1 && (
+                <div className="bg-white rounded-2xl p-5 shadow-sm text-center">
+                  <p className="text-sm text-gray-400">グラフを表示するには2回以上の記録が必要です</p>
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
     </div>
   )
 }
