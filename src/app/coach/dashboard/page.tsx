@@ -82,6 +82,13 @@ export default function CoachDashboard() {
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<'condition' | 'timeline' | 'growth' | 'team' | 'karte'>('condition')
 
+  // ---- タイムラインタブ用：日付フィルタ state ----
+  // '' = 全件表示、'YYYY-MM-DD' = 選択日のみ表示
+  const [timelineDate, setTimelineDate] = useState<string>('')
+  // タイムライン用データ（別途広い期間で取得）
+  const [timelineRecords, setTimelineRecords] = useState<DailyRecordWithUser[]>([])
+  const [timelineLoading, setTimelineLoading] = useState(false)
+
   // ---- カルテタブ用 state ----
   const [allPhysicalRecords, setAllPhysicalRecords] = useState<PhysicalRecord[]>([])
   const [allMaxRecords, setAllMaxRecords] = useState<MaxTrainingRecord[]>([])
@@ -104,6 +111,7 @@ export default function CoachDashboard() {
 
   const loadData = async () => {
     try {
+      // コンディション・成長タブ用は過去14日間で取得
       const startDate = format(subDays(new Date(), 14), 'yyyy-MM-dd')
       const [users, records, t] = await Promise.all([
         getUsers(),
@@ -126,6 +134,30 @@ export default function CoachDashboard() {
     }
   }
 
+  /**
+   * タイムラインタブ用のデータを取得する。
+   * 日付未選択時は過去90日間の全件、日付選択時は選択日のみ取得する。
+   */
+  const loadTimelineRecords = useCallback(async (dateFilter: string) => {
+    setTimelineLoading(true)
+    try {
+      if (dateFilter) {
+        // 選択日のみ取得
+        const data = await getAllDailyRecords(dateFilter, dateFilter)
+        setTimelineRecords(data)
+      } else {
+        // 全件（過去90日間）取得
+        const startDate = format(subDays(new Date(), 89), 'yyyy-MM-dd')
+        const data = await getAllDailyRecords(startDate)
+        setTimelineRecords(data)
+      }
+    } catch (e) {
+      console.error('[Timeline] データ取得エラー:', e)
+    } finally {
+      setTimelineLoading(false)
+    }
+  }, [])
+
   /** チームタブ用に過去21日間のコンディションデータを取得する */
   const loadTeamRecords = useCallback(async (ids: string[]) => {
     if (ids.length === 0) {
@@ -144,6 +176,13 @@ export default function CoachDashboard() {
       setTeamLoading(false)
     }
   }, [])
+
+  // タイムラインタブがアクティブになった / 日付フィルタが変わったときにデータ再取得
+  useEffect(() => {
+    if (activeTab === 'timeline') {
+      loadTimelineRecords(timelineDate)
+    }
+  }, [activeTab, timelineDate, loadTimelineRecords])
 
   // チームタブがアクティブになった / 選択選手が変わったときにデータ再取得
   useEffect(() => {
@@ -184,7 +223,14 @@ export default function CoachDashboard() {
     if (!user || !commentInputs[recordId]?.trim()) return
     try {
       const newComment = await addComment(recordId, user.id, commentInputs[recordId].trim())
+      // recentRecords（コンディション・成長タブ用）を更新
       setRecentRecords(prev =>
+        prev.map(r =>
+          r.id === recordId ? { ...r, comments: [...(r.comments || []), newComment] } : r
+        )
+      )
+      // timelineRecords（タイムラインタブ用）も更新
+      setTimelineRecords(prev =>
         prev.map(r =>
           r.id === recordId ? { ...r, comments: [...(r.comments || []), newComment] } : r
         )
@@ -383,110 +429,158 @@ export default function CoachDashboard() {
         {/* ====== タイムラインタブ ====== */}
         {activeTab === 'timeline' && (
           <div className="space-y-3">
-            {recentRecords.length === 0 ? (
-              <div className="text-center py-12 text-gray-500">
-                <p className="text-4xl mb-3">📝</p>
-                <p className="text-sm">まだ投稿がありません</p>
+
+            {/* ---- 日付フィルタ パネル ---- */}
+            <div className="bg-white rounded-2xl p-4 shadow-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                <div className="flex items-center gap-2 flex-1">
+                  <span className="text-sm font-bold text-gray-700">📅 日付を選択</span>
+                  <input
+                    type="date"
+                    value={timelineDate}
+                    max={format(new Date(), 'yyyy-MM-dd')}
+                    onChange={(e) => setTimelineDate(e.target.value)}
+                    className="flex-1 px-3 py-2 rounded-xl border-2 border-gray-200 focus:border-brand-main focus:outline-none text-sm transition-colors"
+                  />
+                </div>
+                {timelineDate && (
+                  <button
+                    onClick={() => setTimelineDate('')}
+                    className="text-xs text-gray-500 hover:text-gray-700 bg-gray-100 hover:bg-gray-200 px-3 py-2 rounded-xl transition-colors whitespace-nowrap"
+                  >
+                    ✕ 絞り込みを解除
+                  </button>
+                )}
               </div>
-            ) : (
-              recentRecords.slice(0, 20).map(record => {
-                const profileName = record.users?.name || getUserName(record.user_id)
-                const comments = record.comments || []
-                const isExpanded = showComments[record.id]
-                return (
-                  <div key={record.id} className="bg-white rounded-2xl shadow-sm overflow-hidden">
-                    <div className="p-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-sm font-bold text-gray-600">
-                            {profileName.charAt(0)}
-                          </div>
-                          <div>
-                            <p className="text-sm font-semibold text-gray-800">{profileName}</p>
-                            <p className="text-xs text-gray-400">
-                              {format(parseISO(record.record_date), 'M月d日(E)', { locale: ja })}
-                            </p>
-                          </div>
+              <p className="text-xs text-gray-400 mt-2">
+                {timelineDate
+                  ? `${format(parseISO(timelineDate), 'yyyy年M月d日(E)', { locale: ja })} のデータを表示中`
+                  : '過去90日間のデータを表示中（日付を選択すると絞り込めます）'}
+              </p>
+            </div>
+
+            {/* ---- ローディング ---- */}
+            {timelineLoading && (
+              <div className="flex items-center justify-center py-16">
+                <div className="animate-pulse text-brand-main font-bold">データ読み込み中...</div>
+              </div>
+            )}
+
+            {/* ---- レコード一覧 ---- */}
+            {!timelineLoading && timelineRecords.length === 0 && (
+              <div className="text-center py-12 text-gray-500 bg-white rounded-2xl shadow-sm">
+                <p className="text-4xl mb-3">📝</p>
+                <p className="text-sm">
+                  {timelineDate ? 'この日の記録はありません' : 'まだ記録がありません'}
+                </p>
+                {timelineDate && (
+                  <button
+                    onClick={() => setTimelineDate('')}
+                    className="mt-3 text-xs text-brand-dark bg-brand-main px-4 py-2 rounded-xl hover:bg-yellow-400 transition-colors"
+                  >
+                    全件表示に戻す
+                  </button>
+                )}
+              </div>
+            )}
+
+            {!timelineLoading && timelineRecords.map(record => {
+              const profileName = record.users?.name || getUserName(record.user_id)
+              const comments = record.comments || []
+              const isExpanded = showComments[record.id]
+              return (
+                <div key={record.id} className="bg-white rounded-2xl shadow-sm overflow-hidden">
+                  <div className="p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-sm font-bold text-gray-600">
+                          {profileName.charAt(0)}
                         </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full font-medium">
-                            評価 {record.self_evaluation}/10
-                          </span>
-                          {record.fatigue_level >= 7 && (
-                            <span className="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full font-medium">
-                              疲労 {record.fatigue_level}
-                            </span>
-                          )}
+                        <div>
+                          <p className="text-sm font-semibold text-gray-800">{profileName}</p>
+                          <p className="text-xs text-gray-400">
+                            {format(parseISO(record.record_date), 'M月d日(E)', { locale: ja })}
+                          </p>
                         </div>
                       </div>
-                      {record.target_items.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mb-2">
-                          {record.target_items.map((goal, idx) => (
-                            <span key={idx} className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
-                              {goal}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{record.reflection}</p>
-                      <div className="flex items-center gap-2 mt-3 text-xs text-gray-500">
-                        <span>😴 {record.sleep_hours}h</span>
-                        <span className={record.fatigue_level >= 7 ? 'text-red-500 font-medium' : ''}>
-                          疲労 {record.fatigue_level}/10
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full font-medium">
+                          評価 {record.self_evaluation}/10
                         </span>
-                        {record.has_pain && <span className="text-red-500">⚠️ {record.pain_detail}</span>}
+                        {record.fatigue_level >= 7 && (
+                          <span className="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full font-medium">
+                            疲労 {record.fatigue_level}
+                          </span>
+                        )}
                       </div>
                     </div>
-                    <div className="border-t border-gray-100">
-                      <button
-                        onClick={() => setShowComments(prev => ({ ...prev, [record.id]: !prev[record.id] }))}
-                        className="w-full px-4 py-2 text-xs text-gray-500 hover:bg-gray-50 flex items-center justify-between"
-                      >
-                        <span>💬 コメント ({comments.length})</span>
-                        <span>{isExpanded ? '▲' : '▼'}</span>
-                      </button>
-                      {isExpanded && (
-                        <div className="px-4 pb-3">
-                          {comments.length > 0 && (
-                            <div className="space-y-2 mb-3">
-                              {comments.map(comment => (
-                                <div key={comment.id} className="bg-blue-50 border border-blue-100 px-3 py-2 rounded-lg text-xs">
-                                  <span className="font-semibold text-gray-700">
-                                    {comment.users?.name || getUserName(comment.user_id)}
-                                  </span>
-                                  <p className="text-gray-600 mt-0.5">{comment.content}</p>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                          <div className="flex gap-2">
-                            <input
-                              type="text"
-                              value={commentInputs[record.id] || ''}
-                              onChange={(e) => setCommentInputs(prev => ({ ...prev, [record.id]: e.target.value }))}
-                              placeholder="選手にコメントを送る..."
-                              className="flex-1 px-3 py-2 rounded-lg border border-gray-200 focus:border-brand-main focus:outline-none text-xs"
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter' && !e.shiftKey) {
-                                  e.preventDefault()
-                                  handleAddComment(record.id)
-                                }
-                              }}
-                            />
-                            <button
-                              onClick={() => handleAddComment(record.id)}
-                              className="bg-brand-main text-brand-dark font-medium px-4 py-2 rounded-lg text-xs hover:bg-yellow-400 transition-colors"
-                            >
-                              送信
-                            </button>
-                          </div>
-                        </div>
-                      )}
+                    {record.target_items.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mb-2">
+                        {record.target_items.map((goal, idx) => (
+                          <span key={idx} className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+                            {goal}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{record.reflection}</p>
+                    <div className="flex items-center gap-2 mt-3 text-xs text-gray-500">
+                      <span>😴 {record.sleep_hours}h</span>
+                      <span className={record.fatigue_level >= 7 ? 'text-red-500 font-medium' : ''}>
+                        疲労 {record.fatigue_level}/10
+                      </span>
+                      {record.has_pain && <span className="text-red-500">⚠️ {record.pain_detail}</span>}
                     </div>
                   </div>
-                )
-              })
-            )}
+                  <div className="border-t border-gray-100">
+                    <button
+                      onClick={() => setShowComments(prev => ({ ...prev, [record.id]: !prev[record.id] }))}
+                      className="w-full px-4 py-2 text-xs text-gray-500 hover:bg-gray-50 flex items-center justify-between"
+                    >
+                      <span>💬 コメント ({comments.length})</span>
+                      <span>{isExpanded ? '▲' : '▼'}</span>
+                    </button>
+                    {isExpanded && (
+                      <div className="px-4 pb-3">
+                        {comments.length > 0 && (
+                          <div className="space-y-2 mb-3">
+                            {comments.map(comment => (
+                              <div key={comment.id} className="bg-blue-50 border border-blue-100 px-3 py-2 rounded-lg text-xs">
+                                <span className="font-semibold text-gray-700">
+                                  {comment.users?.name || getUserName(comment.user_id)}
+                                </span>
+                                <p className="text-gray-600 mt-0.5">{comment.content}</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={commentInputs[record.id] || ''}
+                            onChange={(e) => setCommentInputs(prev => ({ ...prev, [record.id]: e.target.value }))}
+                            placeholder="選手にコメントを送る..."
+                            className="flex-1 px-3 py-2 rounded-lg border border-gray-200 focus:border-brand-main focus:outline-none text-xs"
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault()
+                                handleAddComment(record.id)
+                              }
+                            }}
+                          />
+                          <button
+                            onClick={() => handleAddComment(record.id)}
+                            className="bg-brand-main text-brand-dark font-medium px-4 py-2 rounded-lg text-xs hover:bg-yellow-400 transition-colors"
+                          >
+                            送信
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
           </div>
         )}
 
