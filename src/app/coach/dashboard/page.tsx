@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { User, DailyRecord, DailyRecordWithUser, Tournament, PhysicalRecord, MaxTrainingRecord } from '@/types/database'
-import { getUsers, getAllDailyRecords, getActiveTournament, addComment, getTeamConditionRecords, getAllPhysicalRecords, getAllMaxTrainingRecords } from '@/lib/data'
+import { getUsers, getAllDailyRecords, getActiveTournament, addComment, getTeamConditionRecords, getAllPhysicalRecords, getAllMaxTrainingRecords, toggleRecordLike } from '@/lib/data'
 import { getSession } from '@/lib/session'
 import Header from '@/components/Header'
 import BottomNav from '@/components/BottomNav'
@@ -81,6 +81,10 @@ export default function CoachDashboard() {
   const [showComments, setShowComments] = useState<Record<string, boolean>>({})
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<'condition' | 'timeline' | 'growth' | 'team' | 'karte'>('condition')
+  // タイムラインの日付フィルター（デフォルト: 当日）
+  const [timelineDate, setTimelineDate] = useState<string>('')
+  // Goodボタンの処理中フラグ（recordId をキーとする）
+  const [likingRecordIds, setLikingRecordIds] = useState<Record<string, boolean>>({})
 
   // ---- カルテタブ用 state ----
   const [allPhysicalRecords, setAllPhysicalRecords] = useState<PhysicalRecord[]>([])
@@ -178,6 +182,78 @@ export default function CoachDashboard() {
   const handleDateChange = (date: string) => {
     setSelectedDate(date)
     setTodayRecords(recentRecords.filter(r => r.record_date === date))
+  }
+
+  /**
+   * タイムラインタブで表示する日付を変更した際のハンドラ。
+   * 選択された日付に絞り込んだデータを Supabase / デモデータから再取得する。
+   */
+  const handleTimelineDateChange = async (date: string) => {
+    setTimelineDate(date)
+    if (!date) {
+      // 日付未選択時は直近7日間を表示する
+      try {
+        const startDate = format(subDays(new Date(), 7), 'yyyy-MM-dd')
+        const data = await getAllDailyRecords(startDate)
+        setRecentRecords(data)
+      } catch (e) { console.error(e) }
+    } else {
+      // 選択した日付1日分だけ取得する
+      try {
+        const data = await getAllDailyRecords(date, date)
+        setRecentRecords(data)
+      } catch (e) { console.error(e) }
+    }
+  }
+
+  /**
+   * コーチが Goodボタンを押したときの処理。
+   * オプティミスティックに UI を更新しつつ、バックエンドにも反映する。
+   */
+  const handleToggleLike = async (recordId: string) => {
+    if (!user || likingRecordIds[recordId]) return
+    setLikingRecordIds(prev => ({ ...prev, [recordId]: true }))
+
+    // オプティミスティック UI: まず先にローカルの state を更新する
+    setRecentRecords(prev =>
+      prev.map(r => {
+        if (r.id !== recordId) return r
+        const currentLikes = r.likes || []
+        const isLiked = currentLikes.some(l => l.coach_id === user.id)
+        if (isLiked) {
+          // 取り消し
+          return { ...r, likes: currentLikes.filter(l => l.coach_id !== user.id) }
+        } else {
+          // 追加（仮データ）
+          return {
+            ...r,
+            likes: [
+              ...currentLikes,
+              { id: 'optimistic', daily_record_id: recordId, coach_id: user.id, created_at: new Date().toISOString() },
+            ],
+          }
+        }
+      })
+    )
+
+    try {
+      const { likes } = await toggleRecordLike(recordId, user.id)
+      // バックエンドから返ってきた正確なデータで上書きする
+      setRecentRecords(prev =>
+        prev.map(r => r.id === recordId ? { ...r, likes } : r)
+      )
+    } catch (e) {
+      console.error('[handleToggleLike] エラー:', e)
+      // エラーの場合はオプティミスティック更新を元に戻す（再フェッチ）
+      try {
+        const startDate = timelineDate || format(subDays(new Date(), 7), 'yyyy-MM-dd')
+        const endDate = timelineDate || undefined
+        const data = await getAllDailyRecords(startDate, endDate)
+        setRecentRecords(data)
+      } catch (_) { /* フォールバック失敗は無視 */ }
+    } finally {
+      setLikingRecordIds(prev => ({ ...prev, [recordId]: false }))
+    }
   }
 
   const handleAddComment = async (recordId: string) => {
@@ -383,15 +459,46 @@ export default function CoachDashboard() {
         {/* ====== タイムラインタブ ====== */}
         {activeTab === 'timeline' && (
           <div className="space-y-3">
+            {/* 日付フィルター */}
+            <div className="bg-white rounded-2xl p-4 shadow-sm">
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="text-sm font-bold text-gray-700">📅 日付で絞り込む</span>
+                <input
+                  type="date"
+                  value={timelineDate}
+                  onChange={(e) => handleTimelineDateChange(e.target.value)}
+                  className="px-3 py-1.5 rounded-lg border border-gray-200 text-sm focus:border-brand-main focus:outline-none"
+                />
+                {timelineDate && (
+                  <button
+                    onClick={() => handleTimelineDateChange('')}
+                    className="text-xs text-gray-500 underline hover:text-gray-700"
+                  >
+                    リセット（直近7日間）
+                  </button>
+                )}
+              </div>
+              {timelineDate && (
+                <p className="text-xs text-gray-400 mt-2">
+                  {format(parseISO(timelineDate), 'yyyy年M月d日(E)', { locale: ja })} のデータを表示しています
+                </p>
+              )}
+            </div>
+
             {recentRecords.length === 0 ? (
               <div className="text-center py-12 text-gray-500">
                 <p className="text-4xl mb-3">📝</p>
-                <p className="text-sm">まだ投稿がありません</p>
+                <p className="text-sm">
+                  {timelineDate ? 'この日の投稿はありません' : 'まだ投稿がありません'}
+                </p>
               </div>
             ) : (
               recentRecords.slice(0, 20).map(record => {
                 const profileName = record.users?.name || getUserName(record.user_id)
                 const comments = record.comments || []
+                const likes = record.likes || []
+                const isLiked = likes.some(l => l.coach_id === user?.id)
+                const isLiking = likingRecordIds[record.id] || false
                 const isExpanded = showComments[record.id]
                 return (
                   <div key={record.id} className="bg-white rounded-2xl shadow-sm overflow-hidden">
@@ -437,52 +544,74 @@ export default function CoachDashboard() {
                         {record.has_pain && <span className="text-red-500">⚠️ {record.pain_detail}</span>}
                       </div>
                     </div>
-                    <div className="border-t border-gray-100">
+                    {/* Goodボタン + コメントボタン */}
+                    <div className="border-t border-gray-100 flex items-center">
+                      {/* 👍 Goodボタン */}
+                      <button
+                        onClick={() => handleToggleLike(record.id)}
+                        disabled={isLiking}
+                        className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium transition-all border-r border-gray-100 ${
+                          isLiked
+                            ? 'text-brand-dark bg-brand-main hover:bg-yellow-400'
+                            : 'text-gray-500 hover:bg-gray-50 hover:text-brand-dark'
+                        } ${isLiking ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      >
+                        <span className="text-base">{isLiked ? '👍' : '👍'}</span>
+                        <span>{isLiked ? '見てるよ！' : '見てるよ'}</span>
+                        {likes.length > 0 && (
+                          <span className={`ml-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                            isLiked ? 'bg-brand-dark text-brand-main' : 'bg-gray-100 text-gray-600'
+                          }`}>
+                            {likes.length}
+                          </span>
+                        )}
+                      </button>
+                      {/* 💬 コメントボタン */}
                       <button
                         onClick={() => setShowComments(prev => ({ ...prev, [record.id]: !prev[record.id] }))}
-                        className="w-full px-4 py-2 text-xs text-gray-500 hover:bg-gray-50 flex items-center justify-between"
+                        className="flex-1 px-4 py-2.5 text-xs text-gray-500 hover:bg-gray-50 flex items-center justify-between"
                       >
                         <span>💬 コメント ({comments.length})</span>
                         <span>{isExpanded ? '▲' : '▼'}</span>
                       </button>
-                      {isExpanded && (
-                        <div className="px-4 pb-3">
-                          {comments.length > 0 && (
-                            <div className="space-y-2 mb-3">
-                              {comments.map(comment => (
-                                <div key={comment.id} className="bg-blue-50 border border-blue-100 px-3 py-2 rounded-lg text-xs">
-                                  <span className="font-semibold text-gray-700">
-                                    {comment.users?.name || getUserName(comment.user_id)}
-                                  </span>
-                                  <p className="text-gray-600 mt-0.5">{comment.content}</p>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                          <div className="flex gap-2">
-                            <input
-                              type="text"
-                              value={commentInputs[record.id] || ''}
-                              onChange={(e) => setCommentInputs(prev => ({ ...prev, [record.id]: e.target.value }))}
-                              placeholder="選手にコメントを送る..."
-                              className="flex-1 px-3 py-2 rounded-lg border border-gray-200 focus:border-brand-main focus:outline-none text-xs"
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter' && !e.shiftKey) {
-                                  e.preventDefault()
-                                  handleAddComment(record.id)
-                                }
-                              }}
-                            />
-                            <button
-                              onClick={() => handleAddComment(record.id)}
-                              className="bg-brand-main text-brand-dark font-medium px-4 py-2 rounded-lg text-xs hover:bg-yellow-400 transition-colors"
-                            >
-                              送信
-                            </button>
-                          </div>
-                        </div>
-                      )}
                     </div>
+                    {isExpanded && (
+                      <div className="px-4 pb-3 border-t border-gray-50">
+                        {comments.length > 0 && (
+                          <div className="space-y-2 mt-2 mb-3">
+                            {comments.map(comment => (
+                              <div key={comment.id} className="bg-blue-50 border border-blue-100 px-3 py-2 rounded-lg text-xs">
+                                <span className="font-semibold text-gray-700">
+                                  {comment.users?.name || getUserName(comment.user_id)}
+                                </span>
+                                <p className="text-gray-600 mt-0.5">{comment.content}</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={commentInputs[record.id] || ''}
+                            onChange={(e) => setCommentInputs(prev => ({ ...prev, [record.id]: e.target.value }))}
+                            placeholder="選手にコメントを送る..."
+                            className="flex-1 px-3 py-2 rounded-lg border border-gray-200 focus:border-brand-main focus:outline-none text-xs"
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault()
+                                handleAddComment(record.id)
+                              }
+                            }}
+                          />
+                          <button
+                            onClick={() => handleAddComment(record.id)}
+                            className="bg-brand-main text-brand-dark font-medium px-4 py-2 rounded-lg text-xs hover:bg-yellow-400 transition-colors"
+                          >
+                            送信
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )
               })

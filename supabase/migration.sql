@@ -108,6 +108,22 @@ CREATE INDEX IF NOT EXISTS idx_max_training_records_user ON max_training_records
 ALTER TABLE users ADD COLUMN IF NOT EXISTS position TEXT;
 
 -- ============================================================
+-- 2026-05-20 追加: Goodボタン（コーチからのリアクション）機能
+-- ============================================================
+-- 振り返りに対するコーチのGoodリアクションを管理するテーブル
+CREATE TABLE IF NOT EXISTS record_likes (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  daily_record_id UUID NOT NULL REFERENCES daily_records(id) ON DELETE CASCADE,
+  coach_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(daily_record_id, coach_id)  -- コーチ1人につき1記録に1回まで
+);
+
+-- インデックス
+CREATE INDEX IF NOT EXISTS idx_record_likes_record ON record_likes(daily_record_id);
+CREATE INDEX IF NOT EXISTS idx_record_likes_coach ON record_likes(coach_id);
+
+-- ============================================================
 -- 参考: 管理者がダッシュボードからパスワードを直接書き換えた場合の動作
 -- ============================================================
 -- password カラムは平文テキストで保存しています。

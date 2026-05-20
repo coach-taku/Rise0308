@@ -55,6 +55,21 @@ export interface Comment {
 export interface DailyRecordWithUser extends DailyRecord {
   users?: User
   comments?: Comment[]
+  // コーチからの Good リアクション
+  likes?: RecordLike[]
+}
+
+// ============================================================
+// Goodボタン（コーチからのリアクション）
+// ============================================================
+
+export interface RecordLike {
+  id: string
+  daily_record_id: string
+  coach_id: string
+  created_at: string
+  // joined
+  users?: User
 }
 
 // ============================================================

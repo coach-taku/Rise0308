@@ -69,6 +69,13 @@ export default function TimelinePage() {
               const profileName = record.users?.name || getUserName(record.user_id)
               const isOwnRecord = record.user_id === user.id
               const comments = record.comments || []
+              const likes = record.likes || []
+              // コーチからの「見てるよ」リアクションがあるかチェック
+              const hasCoachLike = likes.some(l => getUserRole(l.coach_id) === 'staff')
+              // いいねしたコーチ名一覧（表示用）
+              const likedCoachNames = likes
+                .filter(l => getUserRole(l.coach_id) === 'staff')
+                .map(l => l.users?.name || getUserName(l.coach_id))
               const isExpanded = showComments[record.id]
 
               return (
@@ -106,6 +113,16 @@ export default function TimelinePage() {
                       {record.has_pain && <span className="text-red-500">⚠️ 痛みあり</span>}
                       <span>{record.participation_status}</span>
                     </div>
+
+                    {/* コーチからの「見てるよ」リアクション表示（選手自身の投稿のみ） */}
+                    {isOwnRecord && hasCoachLike && (
+                      <div className="mt-3 flex items-center gap-1.5 bg-brand-main/10 border border-brand-main/30 rounded-xl px-3 py-2">
+                        <span className="text-base">👍</span>
+                        <span className="text-xs font-medium text-brand-dark">
+                          {likedCoachNames.join('・')} が「見てるよ！」しました
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   <div className="border-t border-gray-100">

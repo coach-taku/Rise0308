@@ -1,4 +1,4 @@
-import { User, Tournament, MandalaChart, DailyRecord, DailyRecordWithUser, Comment, PhysicalRecord, MaxTrainingRecord } from '@/types/database'
+import { User, Tournament, MandalaChart, DailyRecord, DailyRecordWithUser, Comment, PhysicalRecord, MaxTrainingRecord, RecordLike } from '@/types/database'
 import { getSupabase, isSupabaseConfigured } from './supabase'
 
 // ============================================================
@@ -136,6 +136,8 @@ let demoComments = generateDemoComments(demoRecords)
 const demoUsers = [...DEMO_USERS]
 const demoTournaments = [...DEMO_TOURNAMENTS]
 let demoMandala: Record<string, MandalaChart> = { 'player-1': DEMO_MANDALA }
+// Goodリアクション（コーチからのいいね）のデモデータ
+let demoRecordLikes: RecordLike[] = []
 
 // ============================================================
 // Data access functions
@@ -428,9 +430,14 @@ export async function getAllDailyRecords(startDate?: string, endDate?: string): 
         ...r,
         users: demoUsers.find(u => u.id === r.user_id),
         comments: demoComments.filter(c => c.daily_record_id === r.id),
+        likes: demoRecordLikes.filter(l => l.daily_record_id === r.id),
       }))
   }
-  let query = getSupabase().from('daily_records').select('*, users(*), comments(*, users(*))').order('record_date', { ascending: false })
+  // likes（Goodリアクション）も一緒に取得する
+  let query = getSupabase()
+    .from('daily_records')
+    .select('*, users(*), comments(*, users(*)), likes:record_likes(*, users(*))')
+    .order('record_date', { ascending: false })
   if (startDate) query = query.gte('record_date', startDate)
   if (endDate) query = query.lte('record_date', endDate)
   const { data, error } = await query
@@ -796,6 +803,92 @@ export async function getTeamConditionRecords(
     return []
   }
   return data || []
+}
+
+// ============================================================
+// Goodボタン（コーチからのリアクション）
+// ============================================================
+
+/**
+ * コーチが振り返りに対してGoodリアクションをトグルする。
+ * すでにリアクション済みの場合は取り消し、未リアクションの場合は追加する。
+ * @param dailyRecordId  対象の振り返りID
+ * @param coachId        コーチのユーザーID
+ * @returns              操作後の状態 { liked: boolean, likes: RecordLike[] }
+ */
+export async function toggleRecordLike(
+  dailyRecordId: string,
+  coachId: string
+): Promise<{ liked: boolean; likes: RecordLike[] }> {
+  // --- デモモード ---
+  if (!isSupabaseConfigured()) {
+    const existingIdx = demoRecordLikes.findIndex(
+      l => l.daily_record_id === dailyRecordId && l.coach_id === coachId
+    )
+    if (existingIdx >= 0) {
+      // すでにいいね済み → 取り消す
+      demoRecordLikes.splice(existingIdx, 1)
+    } else {
+      // 未いいね → 追加する
+      demoRecordLikes.push({
+        id: `like-${Date.now()}`,
+        daily_record_id: dailyRecordId,
+        coach_id: coachId,
+        created_at: new Date().toISOString(),
+        users: demoUsers.find(u => u.id === coachId),
+      })
+    }
+    const currentLikes = demoRecordLikes.filter(l => l.daily_record_id === dailyRecordId)
+    const liked = currentLikes.some(l => l.coach_id === coachId)
+    return { liked, likes: currentLikes }
+  }
+
+  // --- Supabase モード ---
+  const supabase = getSupabase()
+
+  // 既存のリアクションを確認する
+  const { data: existing } = await supabase
+    .from('record_likes')
+    .select('id')
+    .eq('daily_record_id', dailyRecordId)
+    .eq('coach_id', coachId)
+    .maybeSingle()
+
+  if (existing) {
+    // すでにいいね済み → 取り消す
+    const { error } = await supabase
+      .from('record_likes')
+      .delete()
+      .eq('daily_record_id', dailyRecordId)
+      .eq('coach_id', coachId)
+    if (error) {
+      console.error('[data] toggleRecordLike() 削除でエラーが発生しました:', error.message)
+      throw error
+    }
+  } else {
+    // 未いいね → 追加する
+    const { error } = await supabase
+      .from('record_likes')
+      .insert({ daily_record_id: dailyRecordId, coach_id: coachId })
+    if (error) {
+      console.error('[data] toggleRecordLike() 追加でエラーが発生しました:', error.message)
+      throw error
+    }
+  }
+
+  // 最新のリアクション一覧を返す
+  const { data: latestLikes, error: fetchError } = await supabase
+    .from('record_likes')
+    .select('*, users(*)')
+    .eq('daily_record_id', dailyRecordId)
+  if (fetchError) {
+    console.error('[data] toggleRecordLike() 再取得でエラーが発生しました:', fetchError.message)
+    throw fetchError
+  }
+
+  const likes = latestLikes || []
+  const liked = likes.some((l: RecordLike) => l.coach_id === coachId)
+  return { liked, likes }
 }
 
 
