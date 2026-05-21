@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { User, DailyRecordWithUser } from '@/types/database'
-import { getAllDailyRecords, addComment, getUsers } from '@/lib/data'
+import { getAllDailyRecords, addComment, updateComment, getUsers } from '@/lib/data'
 import { getSession } from '@/lib/session'
 import Header from '@/components/Header'
 import BottomNav from '@/components/BottomNav'
@@ -15,9 +15,16 @@ export default function TimelinePage() {
   const [user, setUser] = useState<Pick<User, 'id' | 'name' | 'role'> | null>(null)
   const [records, setRecords] = useState<DailyRecordWithUser[]>([])
   const [allUsers, setAllUsers] = useState<User[]>([])
+  // コメント入力値（recordId → テキスト）
   const [commentInputs, setCommentInputs] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
   const [showComments, setShowComments] = useState<Record<string, boolean>>({})
+  // 送信完了メッセージの表示管理（recordId → true/false）
+  const [sentFeedback, setSentFeedback] = useState<Record<string, boolean>>({})
+  // 編集モード管理（commentId → true/false）
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null)
+  // 編集中のテキスト（commentId → テキスト）
+  const [editInputs, setEditInputs] = useState<Record<string, string>>({})
 
   useEffect(() => {
     const session = getSession()
@@ -36,13 +43,52 @@ export default function TimelinePage() {
     loadData()
   }, [router])
 
+  /** コメント送信処理 */
   const handleAddComment = async (recordId: string) => {
     if (!user || !commentInputs[recordId]?.trim()) return
     try {
       const newComment = await addComment(recordId, user.id, commentInputs[recordId].trim())
-      setRecords(prev => prev.map(r => r.id === recordId ? { ...r, comments: [...(r.comments || []), newComment] } : r))
+      setRecords(prev => prev.map(r =>
+        r.id === recordId ? { ...r, comments: [...(r.comments || []), newComment] } : r
+      ))
+      // 入力欄をリセットし、送信完了メッセージを一時表示する
       setCommentInputs(prev => ({ ...prev, [recordId]: '' }))
+      setSentFeedback(prev => ({ ...prev, [recordId]: true }))
+      setTimeout(() => {
+        setSentFeedback(prev => ({ ...prev, [recordId]: false }))
+      }, 2500)
     } catch (e) { console.error(e) }
+  }
+
+  /** コメント修正の開始（編集モードに切り替える） */
+  const handleStartEdit = (commentId: string, currentContent: string) => {
+    setEditingCommentId(commentId)
+    setEditInputs(prev => ({ ...prev, [commentId]: currentContent }))
+  }
+
+  /** コメント修正の確定（保存） */
+  const handleSaveEdit = async (recordId: string, commentId: string) => {
+    const newContent = editInputs[commentId]?.trim()
+    if (!newContent) return
+    try {
+      const updated = await updateComment(commentId, newContent)
+      setRecords(prev => prev.map(r =>
+        r.id === recordId
+          ? {
+              ...r,
+              comments: (r.comments || []).map(c =>
+                c.id === commentId ? { ...c, content: updated.content } : c
+              ),
+            }
+          : r
+      ))
+      setEditingCommentId(null)
+    } catch (e) { console.error(e) }
+  }
+
+  /** コメント修正のキャンセル */
+  const handleCancelEdit = () => {
+    setEditingCommentId(null)
   }
 
   const getUserName = (userId: string) => allUsers.find(u => u.id === userId)?.name || '不明'
@@ -98,6 +144,7 @@ export default function TimelinePage() {
                       </div>
                     )}
 
+                    {/* 改行を反映して表示 */}
                     <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{record.reflection}</p>
 
                     <div className="flex items-center gap-2 mt-3 text-xs text-gray-500">
@@ -115,32 +162,103 @@ export default function TimelinePage() {
                     </button>
                     {isExpanded && (
                       <div className="px-4 pb-3">
+                        {/* コメント一覧 */}
                         {comments.length > 0 && (
                           <div className="space-y-2 mb-3">
                             {comments.map(comment => {
                               const commenterName = comment.users?.name || getUserName(comment.user_id)
                               const isStaffComment = getUserRole(comment.user_id) === 'staff'
+                              const isMyComment = comment.user_id === user.id
+                              const isEditing = editingCommentId === comment.id
+
                               return (
                                 <div key={comment.id} className={`px-3 py-2 rounded-lg text-xs ${isStaffComment ? 'bg-blue-50 border border-blue-100' : 'bg-gray-50'}`}>
-                                  <div className="flex items-center gap-1 mb-1">
-                                    <span className="font-semibold text-gray-700">{commenterName}</span>
-                                    {isStaffComment && <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">コーチ</span>}
+                                  <div className="flex items-center justify-between mb-1">
+                                    <div className="flex items-center gap-1">
+                                      <span className="font-semibold text-gray-700">{commenterName}</span>
+                                      {isStaffComment && <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">コーチ</span>}
+                                    </div>
+                                    {/* 自分のコメントのみ「修正」ボタンを表示 */}
+                                    {isMyComment && !isEditing && (
+                                      <button
+                                        onClick={() => handleStartEdit(comment.id, comment.content)}
+                                        className="text-xs text-gray-400 hover:text-gray-600 underline"
+                                      >
+                                        修正
+                                      </button>
+                                    )}
                                   </div>
-                                  <p className="text-gray-600">{comment.content}</p>
+
+                                  {/* 編集モードと通常表示の切り替え */}
+                                  {isEditing ? (
+                                    <div className="space-y-1.5 mt-1">
+                                      <textarea
+                                        value={editInputs[comment.id] || ''}
+                                        onChange={(e) => setEditInputs(prev => ({ ...prev, [comment.id]: e.target.value }))}
+                                        rows={3}
+                                        className="w-full px-2 py-1.5 rounded border border-gray-300 focus:border-brand-main focus:outline-none text-xs resize-none"
+                                        onKeyDown={(e) => {
+                                          // Shift+Enter で改行、Enter のみで保存
+                                          if (e.key === 'Enter' && !e.shiftKey) {
+                                            e.preventDefault()
+                                            handleSaveEdit(record.id, comment.id)
+                                          }
+                                        }}
+                                      />
+                                      <div className="flex gap-1.5 justify-end">
+                                        <button
+                                          onClick={handleCancelEdit}
+                                          className="px-3 py-1 rounded-lg text-xs bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+                                        >
+                                          キャンセル
+                                        </button>
+                                        <button
+                                          onClick={() => handleSaveEdit(record.id, comment.id)}
+                                          className="px-3 py-1 rounded-lg text-xs bg-brand-main text-brand-dark font-medium hover:bg-yellow-400 transition-colors"
+                                        >
+                                          保存
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    /* 改行を反映して表示 */
+                                    <p className="text-gray-600 whitespace-pre-wrap">{comment.content}</p>
+                                  )}
                                 </div>
                               )
                             })}
                           </div>
                         )}
-                        <div className="flex gap-2">
-                          <input type="text" value={commentInputs[record.id] || ''}
+
+                        {/* 送信完了メッセージ */}
+                        {sentFeedback[record.id] && (
+                          <p className="text-xs text-green-600 font-medium mb-2 text-center">✅ 送信しました</p>
+                        )}
+
+                        {/* コメント入力エリア（textarea で改行対応） */}
+                        <div className="flex gap-2 items-end">
+                          <textarea
+                            value={commentInputs[record.id] || ''}
                             onChange={(e) => setCommentInputs(prev => ({ ...prev, [record.id]: e.target.value }))}
                             placeholder="コメントを書く..."
-                            className="flex-1 px-3 py-2 rounded-lg border border-gray-200 focus:border-brand-main focus:outline-none text-xs"
-                            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAddComment(record.id) } }} />
-                          <button onClick={() => handleAddComment(record.id)}
-                            className="bg-brand-main text-brand-dark font-medium px-4 py-2 rounded-lg text-xs hover:bg-yellow-400 transition-colors">送信</button>
+                            rows={2}
+                            className="flex-1 px-3 py-2 rounded-lg border border-gray-200 focus:border-brand-main focus:outline-none text-xs resize-none"
+                            onKeyDown={(e) => {
+                              // Shift+Enter で改行、Enter のみで送信
+                              if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault()
+                                handleAddComment(record.id)
+                              }
+                            }}
+                          />
+                          <button
+                            onClick={() => handleAddComment(record.id)}
+                            className="bg-brand-main text-brand-dark font-medium px-4 py-2 rounded-lg text-xs hover:bg-yellow-400 transition-colors whitespace-nowrap"
+                          >
+                            送信
+                          </button>
                         </div>
+                        <p className="text-xs text-gray-400 mt-1">Shift+Enterで改行、Enterで送信</p>
                       </div>
                     )}
                   </div>
