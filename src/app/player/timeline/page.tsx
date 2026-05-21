@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { User, DailyRecordWithUser } from '@/types/database'
 import { getAllDailyRecords, addComment, updateComment, getUsers } from '@/lib/data'
@@ -25,6 +25,8 @@ export default function TimelinePage() {
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null)
   // 編集中のテキスト（commentId → テキスト）
   const [editInputs, setEditInputs] = useState<Record<string, string>>({})
+  // メンバー検索キーワード
+  const [searchQuery, setSearchQuery] = useState('')
 
   useEffect(() => {
     const session = getSession()
@@ -42,6 +44,23 @@ export default function TimelinePage() {
     }
     loadData()
   }, [router])
+
+  /**
+   * 検索キーワードによるレコードのフィルタリング
+   * - 選手名・マネージャー名を対象に部分一致検索
+   * - 全角・半角スペースや大文字・小文字の違いを吸収
+   */
+  const filteredRecords = useMemo(() => {
+    const query = searchQuery.trim().replace(/　/g, ' ').toLowerCase()
+    if (!query) return records
+    return records.filter(record => {
+      const name = (record.users?.name || getUserName(record.user_id)).toLowerCase()
+      return name.includes(query)
+    })
+  }, [records, searchQuery, allUsers]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const getUserName = (userId: string) => allUsers.find(u => u.id === userId)?.name || '不明'
+  const getUserRole = (userId: string) => allUsers.find(u => u.id === userId)?.role || 'player'
 
   /** コメント送信処理 */
   const handleAddComment = async (recordId: string) => {
@@ -91,9 +110,6 @@ export default function TimelinePage() {
     setEditingCommentId(null)
   }
 
-  const getUserName = (userId: string) => allUsers.find(u => u.id === userId)?.name || '不明'
-  const getUserRole = (userId: string) => allUsers.find(u => u.id === userId)?.role || 'player'
-
   if (loading || !user) {
     return <div className="flex items-center justify-center min-h-screen"><div className="animate-pulse text-brand-main text-xl font-bold">読み込み中...</div></div>
   }
@@ -105,13 +121,47 @@ export default function TimelinePage() {
         <div className="bg-white rounded-2xl p-4 shadow-sm">
           <h2 className="text-lg font-bold text-brand-dark">グループ共有</h2>
           <p className="text-xs text-gray-500">仲間の振り返りを見て、お互いを高め合おう!</p>
+
+          {/* メンバー検索ボックス */}
+          <div className="relative mt-3">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none">🔍</span>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="メンバー名で検索..."
+              className="w-full pl-8 pr-8 py-2 rounded-xl border border-gray-200 focus:border-brand-main focus:outline-none text-sm bg-gray-50"
+            />
+            {/* 検索クリアボタン（×）：入力がある場合のみ表示 */}
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-base leading-none"
+                aria-label="検索をクリア"
+              >
+                ×
+              </button>
+            )}
+          </div>
         </div>
 
-        {records.length === 0 ? (
+        {/* 検索結果が0件の場合のメッセージ */}
+        {records.length > 0 && filteredRecords.length === 0 ? (
+          <div className="text-center py-12 text-gray-500">
+            <p className="text-4xl mb-3">🔍</p>
+            <p className="text-sm">該当するメンバーが見つかりません</p>
+            <button
+              onClick={() => setSearchQuery('')}
+              className="mt-3 text-xs text-brand-main underline hover:text-yellow-600"
+            >
+              検索をクリアして全員を表示
+            </button>
+          </div>
+        ) : filteredRecords.length === 0 ? (
           <div className="text-center py-12 text-gray-500"><p className="text-4xl mb-3">📝</p><p className="text-sm">まだ投稿がありません</p></div>
         ) : (
           <div className="space-y-3">
-            {records.map(record => {
+            {filteredRecords.map(record => {
               const profileName = record.users?.name || getUserName(record.user_id)
               const isOwnRecord = record.user_id === user.id
               const comments = record.comments || []
