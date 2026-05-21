@@ -39,6 +39,9 @@ export default function UsersPage() {
   // 操作結果のフィードバックメッセージ
   const [successMsg, setSuccessMsg] = useState('')
 
+  // 選手名検索キーワード
+  const [searchQuery, setSearchQuery] = useState('')
+
   useEffect(() => {
     const session = getSession()
     // 未ログインまたはスタッフ以外はリダイレクト
@@ -152,8 +155,24 @@ export default function UsersPage() {
     setTimeout(() => setSuccessMsg(''), 3000)
   }
 
-  const players = users.filter(u => u.role === 'player')
-  const staffs = users.filter(u => u.role === 'staff')
+  // 検索キーワードを正規化（全角スペース→半角・前後空白除去・小文字化）
+  const normalizeText = (text: string) =>
+    text.replace(/　/g, ' ').trim().toLowerCase()
+
+  const normalizedQuery = normalizeText(searchQuery)
+
+  // 全ユーザーをロール別に分類し、検索キーワードで絞り込む
+  const allPlayers = users.filter(u => u.role === 'player')
+  const allStaffs = users.filter(u => u.role === 'staff')
+
+  const players = normalizedQuery
+    ? allPlayers.filter(u => normalizeText(u.name).includes(normalizedQuery))
+    : allPlayers
+
+  const staffs = normalizedQuery
+    ? allStaffs.filter(u => normalizeText(u.name).includes(normalizedQuery))
+    : allStaffs
+
   // パスワード変更対象のユーザー名を取得
   const passwordTargetName = users.find(u => u.id === passwordTargetId)?.name || ''
 
@@ -182,6 +201,30 @@ export default function UsersPage() {
               className="bg-brand-main text-brand-dark font-bold px-4 py-2 rounded-xl hover:bg-yellow-400 transition-colors text-sm shadow-md"
             >
               + 新規登録
+            </button>
+          )}
+        </div>
+
+        {/* 選手名検索ボックス */}
+        <div className="relative">
+          <span className="absolute inset-y-0 left-3 flex items-center pointer-events-none text-gray-400">
+            🔍
+          </span>
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="選手名で検索..."
+            className="w-full pl-9 pr-10 py-2.5 rounded-xl border border-gray-200 focus:border-brand-main focus:outline-none text-sm bg-white shadow-sm"
+          />
+          {/* 検索欄クリアボタン */}
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="absolute inset-y-0 right-3 flex items-center text-gray-400 hover:text-gray-600 transition-colors text-xs"
+              aria-label="検索をクリア"
+            >
+              ✕
             </button>
           )}
         </div>
@@ -279,12 +322,14 @@ export default function UsersPage() {
         {/* 選手一覧 */}
         <section>
           <h3 className="text-sm font-bold text-gray-600 mb-2">
-            選手（{players.length}名）
+            選手（{players.length}名{normalizedQuery ? ` / 全${allPlayers.length}名` : ''}）
           </h3>
           <div className="space-y-2">
             {players.length === 0 ? (
               <div className="text-center py-8 text-gray-400 text-sm bg-white rounded-xl">
-                登録されている選手がいません
+                {normalizedQuery
+                  ? '該当する選手が見つかりません'
+                  : '登録されている選手がいません'}
               </div>
             ) : (
               players.map(user => (
@@ -299,28 +344,30 @@ export default function UsersPage() {
           </div>
         </section>
 
-        {/* スタッフ一覧 */}
-        <section>
-          <h3 className="text-sm font-bold text-gray-600 mb-2">
-            スタッフ（{staffs.length}名）
-          </h3>
-          <div className="space-y-2">
-            {staffs.length === 0 ? (
-              <div className="text-center py-8 text-gray-400 text-sm bg-white rounded-xl">
-                登録されているスタッフがいません
-              </div>
-            ) : (
-              staffs.map(user => (
-                <UserCard
-                  key={user.id}
-                  user={user}
-                  onEdit={() => handleEdit(user)}
-                  onChangePassword={() => handleOpenPasswordModal(user.id)}
-                />
-              ))
-            )}
-          </div>
-        </section>
+        {/* スタッフ一覧（検索中は表示しない） */}
+        {!normalizedQuery && (
+          <section>
+            <h3 className="text-sm font-bold text-gray-600 mb-2">
+              スタッフ（{staffs.length}名）
+            </h3>
+            <div className="space-y-2">
+              {staffs.length === 0 ? (
+                <div className="text-center py-8 text-gray-400 text-sm bg-white rounded-xl">
+                  登録されているスタッフがいません
+                </div>
+              ) : (
+                staffs.map(user => (
+                  <UserCard
+                    key={user.id}
+                    user={user}
+                    onEdit={() => handleEdit(user)}
+                    onChangePassword={() => handleOpenPasswordModal(user.id)}
+                  />
+                ))
+              )}
+            </div>
+          </section>
+        )}
       </main>
 
       {/* パスワード変更モーダル */}
