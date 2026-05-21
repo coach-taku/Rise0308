@@ -530,6 +530,35 @@ export async function addComment(dailyRecordId: string, userId: string, content:
   return data
 }
 
+/**
+ * 送信済みのコメントを修正（上書き）する。
+ * 自分が送信したコメントのみ修正可能（呼び出し側で userId チェックを行うこと）。
+ */
+export async function updateComment(commentId: string, newContent: string): Promise<Comment> {
+  // デモモードの場合はインメモリデータを更新する
+  if (!isSupabaseConfigured()) {
+    const idx = demoComments.findIndex(c => c.id === commentId)
+    if (idx < 0) throw new Error('コメントが見つかりません')
+    demoComments[idx] = { ...demoComments[idx], content: newContent }
+    return {
+      ...demoComments[idx],
+      users: demoUsers.find(u => u.id === demoComments[idx].user_id),
+    }
+  }
+
+  const { data, error } = await getSupabase()
+    .from('comments')
+    .update({ content: newContent })
+    .eq('id', commentId)
+    .select('*, users(*)')
+    .single()
+  if (error) {
+    console.error('[data] updateComment() でエラーが発生しました:', error.message)
+    throw error
+  }
+  return data
+}
+
 // ============================================================
 // カルテ機能（身体測定・MAX測定）
 // ============================================================
