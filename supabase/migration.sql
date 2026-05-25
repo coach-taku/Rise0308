@@ -135,6 +135,19 @@ CREATE TABLE IF NOT EXISTS practice_sessions (
 CREATE INDEX IF NOT EXISTS idx_practice_sessions_date ON practice_sessions(session_date);
 
 -- ============================================================
--- 既存 Supabase プロジェクトへの適用手順（新規プロジェクトは不要）
+-- RLS（Row Level Security）の無効化
 -- ============================================================
--- 上記の CREATE TABLE 〜 部分のみ Supabase SQL Editor で実行してください。
+-- このプロジェクトはRLSを使用しない設計です。
+-- アクセス制御はクライアント側のlocalStorage（user_id / role）で行います。
+-- Supabase でテーブルを作成すると自動でRLSが有効になるため、
+-- 以下のコマンドで明示的に無効化してください。
+-- （既存テーブルも同様に適用済みであることを確認してください）
+ALTER TABLE practice_sessions DISABLE ROW LEVEL SECURITY;
+
+-- ============================================================
+-- 既存 Supabase プロジェクトへの適用手順
+-- ============================================================
+-- Supabase SQL Editor で以下の順に実行してください:
+-- 1. 上記 CREATE TABLE 文でテーブルを作成する
+-- 2. ALTER TABLE practice_sessions DISABLE ROW LEVEL SECURITY; を実行する
+-- ※ 手順2を忘れると保存時に「row-level security policy」エラーが発生します
