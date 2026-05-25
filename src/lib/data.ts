@@ -1,4 +1,4 @@
-import { User, Tournament, MandalaChart, DailyRecord, DailyRecordWithUser, Comment, PhysicalRecord, MaxTrainingRecord } from '@/types/database'
+import { User, Tournament, MandalaChart, DailyRecord, DailyRecordWithUser, Comment, PhysicalRecord, MaxTrainingRecord, PracticeSession } from '@/types/database'
 import { getSupabase, isSupabaseConfigured } from './supabase'
 
 // ============================================================
@@ -827,4 +827,132 @@ export async function getTeamConditionRecords(
   return data || []
 }
 
+// ============================================================
+// Session RPE機能（練習時間・トレーニング負荷管理）
+// コーチ専用：選手側には一切表示しない
+// ============================================================
+
+/** デモ用練習時間データ（インメモリ） */
+const demoPracticeSessions: PracticeSession[] = (() => {
+  const sessions: PracticeSession[] = []
+  const now = new Date()
+  // 過去7日分のデモデータを生成する
+  const durations = [60, 90, 45, 90, 75, 0, 90]
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now)
+    d.setDate(d.getDate() - i)
+    const dateStr = d.toISOString().split('T')[0]
+    const mins = durations[6 - i]
+    if (mins === 0) continue // 練習なしの日はスキップ
+    sessions.push({
+      id: `practice-${dateStr}`,
+      session_date: dateStr,
+      duration_minutes: mins,
+      created_by: 'staff-1',
+      created_at: d.toISOString(),
+      updated_at: d.toISOString(),
+    })
+  }
+  return sessions
+})()
+
+/**
+ * 指定日の練習時間を取得する（コーチ専用）。
+ * @param sessionDate 練習日（YYYY-MM-DD）
+ */
+export async function getPracticeSession(sessionDate: string): Promise<PracticeSession | null> {
+  if (!isSupabaseConfigured()) {
+    return demoPracticeSessions.find(s => s.session_date === sessionDate) || null
+  }
+  const { data, error } = await getSupabase()
+    .from('practice_sessions')
+    .select('*')
+    .eq('session_date', sessionDate)
+    .maybeSingle()
+  if (error) {
+    console.error('[data] getPracticeSession() でエラーが発生しました:', error.message)
+    return null
+  }
+  return data
+}
+
+/**
+ * 指定期間の練習時間を一括取得する（コーチ専用）。
+ * @param startDate 取得開始日（YYYY-MM-DD）
+ * @param endDate   取得終了日（YYYY-MM-DD）
+ */
+export async function getPracticeSessions(startDate: string, endDate: string): Promise<PracticeSession[]> {
+  if (!isSupabaseConfigured()) {
+    return demoPracticeSessions
+      .filter(s => s.session_date >= startDate && s.session_date <= endDate)
+      .sort((a, b) => a.session_date.localeCompare(b.session_date))
+  }
+  const { data, error } = await getSupabase()
+    .from('practice_sessions')
+    .select('*')
+    .gte('session_date', startDate)
+    .lte('session_date', endDate)
+    .order('session_date', { ascending: true })
+  if (error) {
+    console.error('[data] getPracticeSessions() でエラーが発生しました:', error.message)
+    return []
+  }
+  return data || []
+}
+
+/**
+ * 練習時間を保存（upsert）する（コーチ専用）。
+ * 同一 session_date が既に存在する場合は上書きする。
+ * @param sessionDate       練習日（YYYY-MM-DD）
+ * @param durationMinutes   練習時間（分）
+ * @param createdBy         登録コーチの user_id
+ */
+export async function upsertPracticeSession(
+  sessionDate: string,
+  durationMinutes: number,
+  createdBy: string,
+): Promise<PracticeSession> {
+  if (!isSupabaseConfigured()) {
+    const idx = demoPracticeSessions.findIndex(s => s.session_date === sessionDate)
+    const now = new Date().toISOString()
+    if (idx >= 0) {
+      demoPracticeSessions[idx] = {
+        ...demoPracticeSessions[idx],
+        duration_minutes: durationMinutes,
+        updated_at: now,
+      }
+      return demoPracticeSessions[idx]
+    }
+    const newSession: PracticeSession = {
+      id: `practice-${sessionDate}`,
+      session_date: sessionDate,
+      duration_minutes: durationMinutes,
+      created_by: createdBy,
+      created_at: now,
+      updated_at: now,
+    }
+    demoPracticeSessions.push(newSession)
+    return newSession
+  }
+
+  const now = new Date().toISOString()
+  const { data, error } = await getSupabase()
+    .from('practice_sessions')
+    .upsert(
+      {
+        session_date: sessionDate,
+        duration_minutes: durationMinutes,
+        created_by: createdBy,
+        updated_at: now,
+      },
+      { onConflict: 'session_date' },
+    )
+    .select()
+    .single()
+  if (error) {
+    console.error('[data] upsertPracticeSession() でエラーが発生しました:', error.message)
+    throw error
+  }
+  return data
+}
 
