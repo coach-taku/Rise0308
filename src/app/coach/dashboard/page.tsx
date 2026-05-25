@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { User, DailyRecord, DailyRecordWithUser, Tournament, PhysicalRecord, MaxTrainingRecord } from '@/types/database'
-import { getUsers, getAllDailyRecords, getActiveTournament, addComment, updateComment, getTeamConditionRecords, getAllPhysicalRecords, getAllMaxTrainingRecords } from '@/lib/data'
+import { User, DailyRecord, DailyRecordWithUser, Tournament, PhysicalRecord, MaxTrainingRecord, PracticeSession } from '@/types/database'
+import { getUsers, getAllDailyRecords, getActiveTournament, addComment, updateComment, getTeamConditionRecords, getAllPhysicalRecords, getAllMaxTrainingRecords, getPracticeSession, upsertPracticeSession } from '@/lib/data'
 import { getSession } from '@/lib/session'
 import Header from '@/components/Header'
 import BottomNav from '@/components/BottomNav'
@@ -86,7 +86,17 @@ export default function CoachDashboard() {
   // 編集中テキスト（commentId → テキスト）
   const [editInputs, setEditInputs] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<'condition' | 'timeline' | 'growth' | 'team' | 'karte'>('condition')
+  const [activeTab, setActiveTab] = useState<'condition' | 'timeline' | 'growth' | 'team' | 'karte' | 'rpe'>('condition')
+
+  // ---- Session RPEタブ用 state ----
+  // コーチが入力・保存する練習時間（分）
+  const [rpePracticeSession, setRpePracticeSession] = useState<PracticeSession | null>(null)
+  // 入力フォームの値（文字列として管理し保存時に数値変換する）
+  const [rpeDurationInput, setRpeDurationInput] = useState<string>('')
+  // 表示対象日（コンディションタブの selectedDate と共用）
+  const [rpeSaving, setRpeSaving] = useState(false)
+  // 保存完了フィードバック
+  const [rpeSavedFeedback, setRpeSavedFeedback] = useState(false)
 
   // ---- タイムラインタブ用：日付フィルタ state ----
   // '' = 全件表示、'YYYY-MM-DD' = 選択日のみ表示
@@ -139,6 +149,27 @@ export default function CoachDashboard() {
       setLoading(false)
     }
   }
+
+  /**
+   * Session RPEタブ用に指定日の練習時間データを取得する（コーチ専用）。
+   */
+  const loadRpePracticeSession = useCallback(async (date: string) => {
+    try {
+      const session = await getPracticeSession(date)
+      setRpePracticeSession(session)
+      // 既存データがあれば入力欄に反映する
+      setRpeDurationInput(session ? String(session.duration_minutes) : '')
+    } catch (e) {
+      console.error('[RPE] 練習時間データ取得エラー:', e)
+    }
+  }, [])
+
+  // RPEタブがアクティブになった / 日付が変わったときに練習時間データを取得する
+  useEffect(() => {
+    if (activeTab === 'rpe') {
+      loadRpePracticeSession(selectedDate)
+    }
+  }, [activeTab, selectedDate, loadRpePracticeSession])
 
   /**
    * タイムラインタブ用のデータを取得する。
@@ -288,6 +319,30 @@ export default function CoachDashboard() {
     setEditingCommentId(null)
   }
 
+  /**
+   * 練習時間を保存するハンドラ（Session RPEタブ用・コーチ専用）
+   */
+  const handleSavePracticeSession = async () => {
+    if (!user) return
+    const mins = parseInt(rpeDurationInput, 10)
+    if (isNaN(mins) || mins < 0) {
+      alert('練習時間は0以上の整数を入力してください')
+      return
+    }
+    setRpeSaving(true)
+    try {
+      const saved = await upsertPracticeSession(selectedDate, mins, user.id)
+      setRpePracticeSession(saved)
+      setRpeSavedFeedback(true)
+      setTimeout(() => setRpeSavedFeedback(false), 2500)
+    } catch (e) {
+      console.error('[RPE] 練習時間保存エラー:', e)
+      alert('保存に失敗しました。再度お試しください。')
+    } finally {
+      setRpeSaving(false)
+    }
+  }
+
   /** 選手チェックボックスのトグル */
   const togglePlayer = (playerId: string) => {
     setSelectedPlayerIds(prev =>
@@ -355,8 +410,8 @@ export default function CoachDashboard() {
                 : '大会未設定'}
             </p>
           </div>
-          {/* チーム推移・カルテタブでは日付セレクターを非表示 */}
-          {activeTab !== 'team' && activeTab !== 'karte' && (
+          {/* チーム推移・カルテタブでは日付セレクターを非表示（RPEタブは自前で日付管理） */}
+          {activeTab !== 'team' && activeTab !== 'karte' && activeTab !== 'rpe' && (
             <input
               type="date"
               value={selectedDate}
@@ -374,6 +429,7 @@ export default function CoachDashboard() {
             { key: 'growth',    label: '成長・達成度',   icon: '📈' },
             { key: 'team',      label: 'チーム推移',     icon: '📊' },
             { key: 'karte',     label: 'カルテ',         icon: '📋' },
+            { key: 'rpe',       label: 'Session RPE',    icon: '🏋️' },
           ] as const).map(tab => (
             <button
               key={tab.key}
@@ -944,6 +1000,172 @@ export default function CoachDashboard() {
             karteTab={karteTab}
             onKarteTabChange={setKarteTab}
           />
+        )}
+
+        {/* ====== Session RPEタブ ====== */}
+        {activeTab === 'rpe' && (
+          <div className="space-y-4">
+
+            {/* ---- 日付選択 + 練習時間入力パネル ---- */}
+            <div className="bg-white rounded-2xl p-5 shadow-sm">
+              <h3 className="text-sm font-bold text-gray-700 mb-4">🏋️ 練習時間の入力（コーチ専用）</h3>
+
+              {/* 日付選択 */}
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-4">
+                <label className="text-sm text-gray-600 whitespace-nowrap">練習日</label>
+                <input
+                  type="date"
+                  value={selectedDate}
+                  max={format(new Date(), 'yyyy-MM-dd')}
+                  onChange={(e) => handleDateChange(e.target.value)}
+                  className="flex-1 px-3 py-2 rounded-xl border-2 border-gray-200 focus:border-brand-main focus:outline-none text-sm transition-colors"
+                />
+              </div>
+
+              {/* 練習時間入力 */}
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-4">
+                <label className="text-sm text-gray-600 whitespace-nowrap">練習時間（分）</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="300"
+                  value={rpeDurationInput}
+                  onChange={(e) => setRpeDurationInput(e.target.value)}
+                  placeholder="例: 90"
+                  className="flex-1 px-3 py-2 rounded-xl border-2 border-gray-200 focus:border-brand-main focus:outline-none text-sm transition-colors"
+                />
+              </div>
+
+              {/* 保存ボタン + 完了フィードバック */}
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleSavePracticeSession}
+                  disabled={rpeSaving || rpeDurationInput === ''}
+                  className={`px-5 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                    rpeSaving || rpeDurationInput === ''
+                      ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                      : 'bg-brand-main text-brand-dark hover:bg-yellow-400 shadow-sm'
+                  }`}
+                >
+                  {rpeSaving ? '保存中...' : '保存する'}
+                </button>
+                {rpeSavedFeedback && (
+                  <span className="text-sm text-green-600 font-medium">✅ 保存しました</span>
+                )}
+              </div>
+
+              {/* 保存済みデータの表示 */}
+              {rpePracticeSession && (
+                <p className="text-xs text-gray-400 mt-3">
+                  ※ この日の練習時間: <strong className="text-gray-600">{rpePracticeSession.duration_minutes}分</strong>（保存済み）
+                </p>
+              )}
+            </div>
+
+            {/* ---- Session RPE 一覧 ---- */}
+            <div className="bg-white rounded-2xl p-5 shadow-sm">
+              <div className="flex items-center justify-between mb-1">
+                <h3 className="text-sm font-bold text-gray-700">📊 選手別 Session RPE</h3>
+              </div>
+              <p className="text-xs text-gray-400 mb-4">
+                Session RPE ＝ 練習時間（分）× 疲労度 ／
+                対象日: {format(parseISO(selectedDate), 'yyyy年M月d日(E)', { locale: ja })}
+              </p>
+
+              {/* 練習時間未設定の場合 */}
+              {!rpePracticeSession ? (
+                <div className="text-center py-10 text-gray-400">
+                  <p className="text-3xl mb-2">⏱️</p>
+                  <p className="text-sm">上のフォームで練習時間を入力・保存すると<br />Session RPEが自動計算されます</p>
+                </div>
+              ) : (
+                <>
+                  {/* 練習時間サマリー */}
+                  <div className="bg-brand-main/10 border border-brand-main/30 rounded-xl px-4 py-3 mb-4 flex items-center gap-3">
+                    <span className="text-2xl">⏱️</span>
+                    <div>
+                      <p className="text-sm font-bold text-brand-dark">練習時間: {rpePracticeSession.duration_minutes}分</p>
+                      <p className="text-xs text-gray-500">この時間 × 各選手の疲労度 = Session RPE</p>
+                    </div>
+                  </div>
+
+                  {/* 選手別RPEリスト */}
+                  {players.length === 0 ? (
+                    <p className="text-sm text-gray-400 text-center py-6">選手が登録されていません</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {players.map(player => {
+                        // 選択日 or 直近のレコードを優先する
+                        const record = todayRecords.find(r => r.user_id === player.id)
+                          || recentRecords.find(r => r.user_id === player.id)
+                        const fatigue = record?.fatigue_level ?? null
+                        const sessionRpe = fatigue !== null
+                          ? rpePracticeSession.duration_minutes * fatigue
+                          : null
+
+                        // RPEレベルに応じた色分け
+                        const rpeColor =
+                          sessionRpe === null ? 'text-gray-400'
+                          : sessionRpe >= 700 ? 'text-red-500'
+                          : sessionRpe >= 500 ? 'text-orange-500'
+                          : 'text-green-600'
+                        const borderColor =
+                          sessionRpe === null ? 'border-gray-200'
+                          : sessionRpe >= 700 ? 'border-red-400'
+                          : sessionRpe >= 500 ? 'border-orange-400'
+                          : 'border-green-400'
+
+                        return (
+                          <div
+                            key={player.id}
+                            className={`flex items-center justify-between px-4 py-3 rounded-xl border-l-4 bg-gray-50 ${borderColor}`}
+                          >
+                            <div>
+                              <p className="text-sm font-semibold text-gray-800">{player.name}</p>
+                              <p className="text-xs text-gray-400 mt-0.5">
+                                {fatigue !== null
+                                  ? `疲労度: ${fatigue}/10 × ${rpePracticeSession.duration_minutes}分`
+                                  : 'この日のデータなし'}
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <p className={`text-xl font-bold ${rpeColor}`}>
+                                {sessionRpe !== null ? sessionRpe : '-'}
+                              </p>
+                              <p className="text-xs text-gray-400">Session RPE</p>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+
+                  {/* RPEレベルの目安 */}
+                  <div className="mt-5 border-t border-gray-100 pt-4">
+                    <p className="text-xs font-bold text-gray-600 mb-2">📌 Session RPE の目安</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs text-gray-500">
+                      <div className="flex items-center gap-2 bg-green-50 rounded-lg px-3 py-2">
+                        <span className="w-3 h-3 rounded-full bg-green-400 flex-shrink-0" />
+                        <span>〜499: 低負荷（回復系）</span>
+                      </div>
+                      <div className="flex items-center gap-2 bg-orange-50 rounded-lg px-3 py-2">
+                        <span className="w-3 h-3 rounded-full bg-orange-400 flex-shrink-0" />
+                        <span>500〜699: 中負荷（標準）</span>
+                      </div>
+                      <div className="flex items-center gap-2 bg-red-50 rounded-lg px-3 py-2">
+                        <span className="w-3 h-3 rounded-full bg-red-400 flex-shrink-0" />
+                        <span>700以上: 高負荷（要管理）</span>
+                      </div>
+                    </div>
+                    <p className="text-xs text-gray-400 mt-2">
+                      ※ 計算式: 練習時間（分）× 疲労度（1〜10）。疲労度は選手が入力したその日のデータを使用します。
+                    </p>
+                  </div>
+                </>
+              )}
+            </div>
+
+          </div>
         )}
 
       </main>

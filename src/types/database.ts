@@ -83,3 +83,21 @@ export interface MaxTrainingRecord {
   deadlift_kg: number | null     // デッドリフト (kg)
   created_at: string
 }
+
+// ============================================================
+// Session RPE機能（練習時間・トレーニング負荷管理）
+// ============================================================
+
+/**
+ * コーチが入力する日々の練習時間を記録するテーブル。
+ * Session RPE = 練習時間（分） × 疲労度（1〜10） で算出する。
+ * コーチ権限のみが入力・閲覧する（選手側には表示しない）。
+ */
+export interface PracticeSession {
+  id: string
+  session_date: string        // 練習日 (YYYY-MM-DD)
+  duration_minutes: number    // 練習時間（分）
+  created_by: string          // 登録したコーチの user_id
+  created_at: string
+  updated_at: string
+}

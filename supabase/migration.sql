@@ -114,3 +114,27 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS position TEXT;
 -- Supabase ダッシュボードの Table Editor から直接 password カラムを
 -- 書き換えることで、次回ログイン時からその値で認証されます。
 -- （アプリ側は毎回 DB の値をリアルタイムで照合するため即時反映されます）
+
+-- ============================================================
+-- 2026-05-25 追加: Session RPE機能（練習時間・トレーニング負荷管理）
+-- ============================================================
+
+-- 8. Practice Sessions table（コーチが入力する日々の練習時間）
+-- Session RPE = 練習時間（分）× 疲労度（1〜10）で算出する
+-- コーチ権限のみが操作する（選手側への表示なし）
+CREATE TABLE IF NOT EXISTS practice_sessions (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  session_date DATE NOT NULL UNIQUE,           -- 練習日（1日1レコード）
+  duration_minutes INTEGER NOT NULL CHECK (duration_minutes >= 0),  -- 練習時間（分）
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,  -- 登録コーチのuser_id
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- インデックス
+CREATE INDEX IF NOT EXISTS idx_practice_sessions_date ON practice_sessions(session_date);
+
+-- ============================================================
+-- 既存 Supabase プロジェクトへの適用手順（新規プロジェクトは不要）
+-- ============================================================
+-- 上記の CREATE TABLE 〜 部分のみ Supabase SQL Editor で実行してください。
