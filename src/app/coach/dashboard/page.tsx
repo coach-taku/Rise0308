@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { User, DailyRecord, DailyRecordWithUser, Tournament, PhysicalRecord, MaxTrainingRecord, PracticeSession } from '@/types/database'
-import { getUsers, getAllDailyRecords, getActiveTournament, addComment, updateComment, getTeamConditionRecords, getAllPhysicalRecords, getAllMaxTrainingRecords, getPracticeSession, upsertPracticeSession } from '@/lib/data'
+import { getUsers, getAllDailyRecords, getActiveTournament, addComment, updateComment, getTeamConditionRecords, getAllPhysicalRecords, getAllMaxTrainingRecords, getPracticeSession, getPracticeSessions, upsertPracticeSession } from '@/lib/data'
 import { getSession } from '@/lib/session'
 import Header from '@/components/Header'
 import BottomNav from '@/components/BottomNav'
@@ -98,6 +98,15 @@ export default function CoachDashboard() {
   // 保存完了フィードバック
   const [rpeSavedFeedback, setRpeSavedFeedback] = useState(false)
 
+  // ---- Session RPEグラフ用 state ----
+  // グラフ表示期間（日数）
+  const [rpeGraphDays, setRpeGraphDays] = useState<30 | 60 | 90>(30)
+  // 期間内の練習時間データ（グラフ描画用）
+  const [rpeGraphSessions, setRpeGraphSessions] = useState<PracticeSession[]>([])
+  // 期間内の全選手コンディションデータ（グラフ描画用）
+  const [rpeGraphRecords, setRpeGraphRecords] = useState<import('@/types/database').DailyRecord[]>([])
+  const [rpeGraphLoading, setRpeGraphLoading] = useState(false)
+
   // ---- タイムラインタブ用：日付フィルタ state ----
   // '' = 全件表示、'YYYY-MM-DD' = 選択日のみ表示
   const [timelineDate, setTimelineDate] = useState<string>('')
@@ -170,6 +179,38 @@ export default function CoachDashboard() {
       loadRpePracticeSession(selectedDate)
     }
   }, [activeTab, selectedDate, loadRpePracticeSession])
+
+  /**
+   * Session RPEグラフ用に期間内の練習時間・コンディションデータを取得する。
+   */
+  const loadRpeGraphData = useCallback(async (days: number) => {
+    setRpeGraphLoading(true)
+    try {
+      const endDate = format(new Date(), 'yyyy-MM-dd')
+      const startDate = format(subDays(new Date(), days - 1), 'yyyy-MM-dd')
+      // 全選手のIDリストを取得して期間内のコンディションデータを取得する
+      const allPlayerIds = allUsers.filter(u => u.role === 'player').map(u => u.id)
+      const [sessions, records] = await Promise.all([
+        getPracticeSessions(startDate, endDate),
+        allPlayerIds.length > 0
+          ? getTeamConditionRecords(allPlayerIds, startDate, endDate)
+          : Promise.resolve([]),
+      ])
+      setRpeGraphSessions(sessions)
+      setRpeGraphRecords(records)
+    } catch (e) {
+      console.error('[RPE Graph] データ取得エラー:', e)
+    } finally {
+      setRpeGraphLoading(false)
+    }
+  }, [allUsers])
+
+  // RPEタブがアクティブになった / グラフ期間が変わったときにデータ再取得する
+  useEffect(() => {
+    if (activeTab === 'rpe') {
+      loadRpeGraphData(rpeGraphDays)
+    }
+  }, [activeTab, rpeGraphDays, loadRpeGraphData])
 
   /**
    * タイムラインタブ用のデータを取得する。
@@ -1165,6 +1206,16 @@ export default function CoachDashboard() {
               )}
             </div>
 
+            {/* ---- Session RPE 長期推移グラフ ---- */}
+            <SessionRpeGraph
+              sessions={rpeGraphSessions}
+              records={rpeGraphRecords}
+              players={players}
+              days={rpeGraphDays}
+              loading={rpeGraphLoading}
+              onChangeDays={(d) => setRpeGraphDays(d)}
+            />
+
           </div>
         )}
 
@@ -1565,6 +1616,248 @@ function KarteTab({
                 </div>
               )}
             </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// ============================================================
+// Session RPEグラフ コンポーネント
+// ============================================================
+
+/**
+ * Session RPEグラフのプロパティ定義
+ */
+interface SessionRpeGraphProps {
+  /** 期間内の練習時間データ（日付ごと） */
+  sessions: import('@/types/database').PracticeSession[]
+  /** 期間内の全選手コンディションデータ */
+  records: import('@/types/database').DailyRecord[]
+  /** 選手一覧 */
+  players: User[]
+  /** 表示日数（30/60/90日） */
+  days: 30 | 60 | 90
+  /** ローディング中かどうか */
+  loading: boolean
+  /** 表示期間変更ハンドラ */
+  onChangeDays: (d: 30 | 60 | 90) => void
+}
+
+/**
+ * グラフ1点分のデータ型（日付・チーム平均Session RPE）
+ */
+interface RpeGraphPoint {
+  /** 表示用日付ラベル（M/d形式） */
+  date: string
+  /** YYYY-MM-DD形式（ソート・特定用） */
+  rawDate: string
+  /** チーム平均 Session RPE（練習時間 × 疲労度平均）。データなしは null */
+  avgRpe: number | null
+  /** 練習時間（分）。その日の練習時間データ */
+  duration: number | null
+}
+
+/**
+ * Session RPE 長期推移グラフコンポーネント。
+ * 各日の「練習時間 × チーム平均疲労度 = チーム平均Session RPE」を折れ線グラフで表示する。
+ * 練習時間が未入力の日や疲労度データがない日はグラフ上に点が表示されない。
+ */
+function SessionRpeGraph({ sessions, records, players, days, loading, onChangeDays }: SessionRpeGraphProps) {
+  const playerIds = players.map(p => p.id)
+
+  // 日付ごとにSession RPEを計算してグラフ用データを生成する
+  const graphData: RpeGraphPoint[] = (() => {
+    const result: RpeGraphPoint[] = []
+    const now = new Date()
+    for (let i = days - 1; i >= 0; i--) {
+      const d = subDays(now, i)
+      const rawDate = format(d, 'yyyy-MM-dd')
+      const dateLabel = format(d, 'M/d')
+
+      // その日の練習時間を取得する
+      const session = sessions.find(s => s.session_date === rawDate)
+      const duration = session?.duration_minutes ?? null
+
+      // その日の選手の疲労度データを集計する
+      const dayRecords = records.filter(
+        r => r.record_date === rawDate && playerIds.includes(r.user_id)
+      )
+
+      if (duration === null || dayRecords.length === 0) {
+        // 練習時間未入力 or 選手のデータなし → null（グラフに点を表示しない）
+        result.push({ date: dateLabel, rawDate, avgRpe: null, duration })
+      } else {
+        // チーム平均疲労度を計算する
+        const avgFatigue =
+          dayRecords.reduce((s, r) => s + r.fatigue_level, 0) / dayRecords.length
+        // Session RPE = 練習時間（分）× 疲労度平均
+        const avgRpe = Math.round(duration * avgFatigue)
+        result.push({ date: dateLabel, rawDate, avgRpe, duration })
+      }
+    }
+    return result
+  })()
+
+  // 有効データ数（グラフに表示できる日数）
+  const validCount = graphData.filter(d => d.avgRpe !== null).length
+
+  // グラフの最大値（RPE目安の700を基準に余裕を持たせる）
+  const maxRpe = Math.max(
+    ...graphData.filter(d => d.avgRpe !== null).map(d => d.avgRpe as number),
+    700
+  )
+  const yMax = Math.ceil(maxRpe / 100) * 100 + 100
+
+  // 期間平均Session RPE（サマリー表示用）
+  const validRpes = graphData.filter(d => d.avgRpe !== null).map(d => d.avgRpe as number)
+  const overallAvgRpe =
+    validRpes.length > 0
+      ? Math.round(validRpes.reduce((s, v) => s + v, 0) / validRpes.length)
+      : null
+
+  // RPEレベル色判定
+  const avgRpeColor =
+    overallAvgRpe === null ? 'text-gray-400'
+    : overallAvgRpe >= 700 ? 'text-red-500'
+    : overallAvgRpe >= 500 ? 'text-orange-500'
+    : 'text-green-600'
+
+  return (
+    <div className="bg-white rounded-2xl p-5 shadow-sm">
+      {/* タイトル + 期間切り替え */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-1">
+        <h3 className="text-sm font-bold text-gray-700">📈 Session RPE 長期推移グラフ</h3>
+        {/* 表示期間切り替えボタン */}
+        <div className="flex gap-1.5">
+          {([30, 60, 90] as const).map(d => (
+            <button
+              key={d}
+              onClick={() => onChangeDays(d)}
+              className={`px-3 py-1 rounded-lg text-xs font-medium transition-all ${
+                days === d
+                  ? 'bg-brand-main text-brand-dark shadow-sm'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              {d}日
+            </button>
+          ))}
+        </div>
+      </div>
+      <p className="text-xs text-gray-400 mb-4">
+        チーム平均 Session RPE ＝ 練習時間（分）× チーム平均疲労度 ／ 過去{days}日間
+      </p>
+
+      {/* ローディング中 */}
+      {loading && (
+        <div className="flex items-center justify-center py-16">
+          <div className="animate-pulse text-brand-main font-bold">データ読み込み中...</div>
+        </div>
+      )}
+
+      {/* データ取得後 */}
+      {!loading && (
+        <>
+          {/* サマリーカード */}
+          <div className="grid grid-cols-3 gap-3 mb-5">
+            <div className="bg-gray-50 rounded-xl p-3 text-center">
+              <p className="text-xs text-gray-500 mb-1">期間平均 RPE</p>
+              <p className={`text-xl font-bold ${avgRpeColor}`}>
+                {overallAvgRpe !== null ? overallAvgRpe : '-'}
+              </p>
+              <p className="text-xs text-gray-400">/ セッション</p>
+            </div>
+            <div className="bg-gray-50 rounded-xl p-3 text-center">
+              <p className="text-xs text-gray-500 mb-1">練習日数</p>
+              <p className="text-xl font-bold text-gray-700">{sessions.filter(s => {
+                const start = format(subDays(new Date(), days - 1), 'yyyy-MM-dd')
+                return s.session_date >= start
+              }).length}</p>
+              <p className="text-xs text-gray-400">日（過去{days}日）</p>
+            </div>
+            <div className="bg-gray-50 rounded-xl p-3 text-center">
+              <p className="text-xs text-gray-500 mb-1">データあり</p>
+              <p className="text-xl font-bold text-gray-700">{validCount}</p>
+              <p className="text-xs text-gray-400">日分</p>
+            </div>
+          </div>
+
+          {/* 折れ線グラフ本体 */}
+          {validCount === 0 ? (
+            <div className="text-center py-10 text-gray-400">
+              <p className="text-3xl mb-2">📭</p>
+              <p className="text-sm">この期間に練習時間と疲労度のデータがある日が<br />見つかりませんでした</p>
+              <p className="text-xs mt-2">練習時間を入力・保存すると、選手の疲労度と合わせてグラフが表示されます</p>
+            </div>
+          ) : (
+            <>
+              <ResponsiveContainer width="100%" height={260}>
+                <LineChart data={graphData} margin={{ top: 5, right: 10, left: -5, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fontSize: 10 }}
+                    interval={days === 30 ? 4 : days === 60 ? 8 : 13}
+                  />
+                  <YAxis
+                    domain={[0, yMax]}
+                    tick={{ fontSize: 11 }}
+                    tickCount={6}
+                    tickFormatter={(v) => String(v)}
+                  />
+                  <Tooltip
+                    contentStyle={{ borderRadius: '8px', fontSize: '12px' }}
+                    formatter={(value, name) => {
+                      if (name === 'avgRpe') return [`${value}`, 'Session RPE（チーム平均）']
+                      return [value, name]
+                    }}
+                    labelFormatter={(label) => `📅 ${label}`}
+                  />
+                  <Legend
+                    formatter={() => `Session RPE チーム平均（${players.length}名）`}
+                    wrapperStyle={{ fontSize: '11px' }}
+                  />
+                  {/* RPE目安の参照線 */}
+                  <defs>
+                    <linearGradient id="rpeGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#f97316" stopOpacity={0.15} />
+                      <stop offset="95%" stopColor="#f97316" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  {/* Session RPE折れ線 */}
+                  <Line
+                    type="monotone"
+                    dataKey="avgRpe"
+                    name="avgRpe"
+                    stroke="#f97316"
+                    strokeWidth={2.5}
+                    dot={{ r: 3, fill: '#f97316', strokeWidth: 0 }}
+                    activeDot={{ r: 6, fill: '#f97316' }}
+                    connectNulls={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+
+              {/* RPEゾーンの色帯 凡例 */}
+              <div className="flex flex-wrap gap-3 mt-3 justify-end">
+                <span className="text-xs text-gray-400 flex items-center gap-1">
+                  <span className="inline-block w-3 h-0.5 bg-red-400 rounded" /> 700以上: 高負荷（要管理）
+                </span>
+                <span className="text-xs text-gray-400 flex items-center gap-1">
+                  <span className="inline-block w-3 h-0.5 bg-orange-400 rounded" /> 500〜699: 中負荷（標準）
+                </span>
+                <span className="text-xs text-gray-400 flex items-center gap-1">
+                  <span className="inline-block w-3 h-0.5 bg-green-400 rounded" /> 〜499: 低負荷（回復系）
+                </span>
+              </div>
+
+              {/* データ補足 */}
+              <p className="text-xs text-gray-400 mt-2">
+                ※ 練習時間が未入力の日、または選手がその日の疲労度を入力していない日は点が表示されません。
+              </p>
+            </>
           )}
         </>
       )}
