@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { User, Tournament, DailyRecord } from '@/types/database'
-import { getActiveTournament, getDailyRecords, getMandalaChart } from '@/lib/data'
+import { getActiveTournament, getDailyRecords, calculateStreak } from '@/lib/data'
 import { getSession } from '@/lib/session'
 import Header from '@/components/Header'
 import BottomNav from '@/components/BottomNav'
@@ -15,7 +15,10 @@ export default function PlayerDashboard() {
   const router = useRouter()
   const [user, setUser] = useState<Pick<User, 'id' | 'name' | 'role'> | null>(null)
   const [tournament, setTournament] = useState<Tournament | null>(null)
-  const [records, setRecords] = useState<DailyRecord[]>([])
+  // 全件レコード（累計計算・ストリーク計算に使用）
+  const [allRecords, setAllRecords] = useState<DailyRecord[]>([])
+  // 直近30日のレコード（週間サマリー・グラフに使用）
+  const [recentRecords, setRecentRecords] = useState<DailyRecord[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -27,12 +30,17 @@ export default function PlayerDashboard() {
 
     const loadData = async () => {
       try {
-        const [t, r] = await Promise.all([
+        // 全件と直近30日を並列で取得する
+        const [t, allR, recentR] = await Promise.all([
           getActiveTournament(),
+          // startDate未指定で全期間のデータを取得（累計記録数・ストリーク計算用）
+          getDailyRecords(userData.id),
+          // 直近30日（週間サマリー・グラフ用）
           getDailyRecords(userData.id, format(subDays(new Date(), 30), 'yyyy-MM-dd')),
         ])
         setTournament(t)
-        setRecords(r)
+        setAllRecords(allR)
+        setRecentRecords(recentR)
       } catch (e) { console.error(e) }
       finally { setLoading(false) }
     }
@@ -48,23 +56,33 @@ export default function PlayerDashboard() {
   }
 
   const now = new Date()
-  const weekRecords = records.filter(r => differenceInDays(now, parseISO(r.record_date)) <= 7)
+
+  // 週間サマリー（直近7日）
+  const weekRecords = recentRecords.filter(r => differenceInDays(now, parseISO(r.record_date)) <= 7)
   const weekAvgEval = weekRecords.length > 0
     ? (weekRecords.reduce((sum, r) => sum + r.self_evaluation, 0) / weekRecords.length).toFixed(1)
     : '-'
   const weekPoints = weekRecords.reduce((sum, r) => sum + r.points, 0)
-  const totalPoints = records.reduce((sum, r) => sum + r.points, 0)
+
+  // 累計ポイント・累計記録数は全件データを使用
+  const totalPoints = allRecords.reduce((sum, r) => sum + r.points, 0)
+  const totalRecordCount = allRecords.length
+
+  // 連続記録日数（過去全データから算出）
+  const streakDays = calculateStreak(allRecords)
+
   const daysRemaining = tournament ? differenceInDays(parseISO(tournament.target_date), now) : null
-  const allEvalAvg = records.length > 0
-    ? Math.round((records.reduce((sum, r) => sum + r.self_evaluation, 0) / records.length) * 10)
+  const allEvalAvg = recentRecords.length > 0
+    ? Math.round((recentRecords.reduce((sum, r) => sum + r.self_evaluation, 0) / recentRecords.length) * 10)
     : 0
 
-  const participationCounts = records.reduce((acc, r) => {
+  const participationCounts = recentRecords.reduce((acc, r) => {
     acc[r.participation_status] = (acc[r.participation_status] || 0) + 1
     return acc
   }, {} as Record<string, number>)
 
-  const chartData = records.slice(-14).map(r => ({
+  // グラフは直近14件を使用
+  const chartData = recentRecords.slice(-14).map(r => ({
     date: format(parseISO(r.record_date), 'M/d'),
     evaluation: r.self_evaluation,
     fatigue: r.fatigue_level,
@@ -79,6 +97,29 @@ export default function PlayerDashboard() {
           <p className="text-sm text-gray-300">おかえりなさい</p>
           <h2 className="text-xl font-bold mt-1">{user.name}</h2>
           <p className="text-brand-main text-sm mt-2 font-semibold">累計ポイント: {totalPoints} pt</p>
+        </div>
+
+        {/* 連続記録・累計記録カード */}
+        <div className="grid grid-cols-2 gap-3">
+          {/* 連続記録日数（ストリーク） */}
+          <div className="bg-white rounded-2xl p-4 shadow-sm text-center">
+            <p className="text-xs text-gray-500">🔥 連続記録</p>
+            <p className="text-3xl font-bold text-brand-main mt-1">{streakDays}</p>
+            <p className="text-xs text-gray-400">日継続中</p>
+            {streakDays >= 3 && (
+              <p className="text-xs text-orange-500 font-medium mt-1">
+                {streakDays >= 30 ? '🏆 すごい!1ヶ月突破!' :
+                  streakDays >= 14 ? '⭐ 2週間継続!' :
+                  streakDays >= 7 ? '✨ 1週間達成!' : '🔥 連続中!'}
+              </p>
+            )}
+          </div>
+          {/* 累計記録日数 */}
+          <div className="bg-white rounded-2xl p-4 shadow-sm text-center">
+            <p className="text-xs text-gray-500">📝 累計記録</p>
+            <p className="text-3xl font-bold text-brand-dark mt-1">{totalRecordCount}</p>
+            <p className="text-xs text-gray-400">日分の記録</p>
+          </div>
         </div>
 
         {/* Tournament countdown */}
@@ -121,7 +162,7 @@ export default function PlayerDashboard() {
             <p className="text-xs text-gray-400">pt</p>
           </div>
           <div className="bg-white rounded-xl p-4 shadow-sm text-center">
-            <p className="text-xs text-gray-500">記録日数</p>
+            <p className="text-xs text-gray-500">今週記録</p>
             <p className="text-2xl font-bold text-brand-dark mt-1">{weekRecords.length}</p>
             <p className="text-xs text-gray-400">/7日</p>
           </div>
