@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { User, MandalaChart, DailyRecord } from '@/types/database'
-import { getMandalaChart, getDailyRecord, saveDailyRecord } from '@/lib/data'
+import { getMandalaChart, getDailyRecord, saveDailyRecord, getDailyRecords, calculateStreak } from '@/lib/data'
 import { getSession } from '@/lib/session'
 import { calculatePoints, getPointMessage } from '@/lib/points'
 import Header from '@/components/Header'
@@ -17,6 +17,17 @@ const PARTICIPATION_OPTIONS = [
   { value: '通院', label: '通院', emoji: '🏥' },
   { value: 'REST', label: 'REST', emoji: '😴' },
 ] as const
+
+// 連続日数に応じたメッセージを返す
+function getStreakMessage(streak: number): string {
+  if (streak >= 30) return '🏆 1ヶ月連続！本物の習慣になってる！'
+  if (streak >= 21) return '⭐ 3週間連続！すごい粘り強さだ！'
+  if (streak >= 14) return '✨ 2週間連続継続中！成長が加速している！'
+  if (streak >= 7) return '🔥 1週間継続！この調子で行こう！'
+  if (streak >= 3) return '👍 連続記録中！続けることが力になる！'
+  if (streak >= 1) return '🌱 新しい一歩を踏み出した！'
+  return '📝 記録完了！また明日も書いてね！'
+}
 
 export default function DailyInputPage() {
   const router = useRouter()
@@ -36,6 +47,10 @@ export default function DailyInputPage() {
   const [earnedPoints, setEarnedPoints] = useState(0)
   const [loading, setLoading] = useState(true)
   const [existingRecord, setExistingRecord] = useState(false)
+  // 保存後に算出するストリーク日数
+  const [streakDays, setStreakDays] = useState(0)
+  // 今日が今回の保存で初めて完了したかどうか（初回保存 = 新規 ＝ ポジティブポップアップを強調）
+  const [isNewRecord, setIsNewRecord] = useState(false)
 
   useEffect(() => {
     const session = getSession()
@@ -83,6 +98,8 @@ export default function DailyInputPage() {
   const handleSave = async () => {
     if (!user) return
     setSaving(true)
+    // 保存前に「既存レコードかどうか」を記録しておく（ポップアップの内容変更用）
+    const wasNewRecord = !existingRecord
     try {
       const pts = calculatePoints(reflection)
       setEarnedPoints(pts)
@@ -91,6 +108,18 @@ export default function DailyInputPage() {
         has_pain: hasPain, pain_detail: painDetail, participation_status: participationStatus,
         target_items: targetItems, self_evaluation: selfEvaluation, reflection, points: pts,
       })
+
+      // 保存後に全件記録を取得してストリークを再計算する
+      try {
+        const latestRecords = await getDailyRecords(user.id)
+        const streak = calculateStreak(latestRecords)
+        setStreakDays(streak)
+      } catch (e) {
+        console.error('[daily] ストリーク計算に失敗しました:', e)
+        setStreakDays(0)
+      }
+
+      setIsNewRecord(wasNewRecord)
       setShowSuccess(true)
     } catch (e) { console.error(e); alert('保存に失敗しました') }
     finally { setSaving(false) }
@@ -111,19 +140,40 @@ export default function DailyInputPage() {
     return <div className="flex items-center justify-center min-h-screen"><div className="animate-pulse text-brand-main text-xl font-bold">読み込み中...</div></div>
   }
 
+  // 記録完了画面（ポジティブフィードバック）
   if (showSuccess) {
     return (
       <div className="min-h-screen bg-brand-bg pb-20 md:pb-8">
         <Header userName={user.name} role="player" />
         <div className="flex items-center justify-center px-4" style={{ minHeight: 'calc(100vh - 200px)' }}>
-          <div className="text-center max-w-sm">
-            <div className="text-6xl mb-4">🎉</div>
-            <h2 className="text-2xl font-bold text-brand-dark mb-2">記録完了!</h2>
+          <div className="text-center max-w-sm w-full">
+            {/* ポジティブフィードバック：中央ポップアップ風カード */}
+            <div className="text-6xl mb-4">{isNewRecord ? '🎉' : '✏️'}</div>
+            <h2 className="text-2xl font-bold text-brand-dark mb-2">
+              {isNewRecord ? '記録完了！お疲れさま！' : '記録を更新しました！'}
+            </h2>
+
+            {/* ポイント表示 */}
             <div className="bg-brand-main text-brand-dark rounded-2xl p-4 mb-4">
               <p className="text-3xl font-bold">+{earnedPoints} pt</p>
               <p className="text-sm mt-1">{getPointMessage(earnedPoints)}</p>
             </div>
-            <p className="text-gray-600 text-sm mb-6">今日も振り返りおつかれさま!<br />続けることが一番の成長の証です。</p>
+
+            {/* ストリーク表示（新規記録の場合のみ強調表示） */}
+            {isNewRecord && (
+              <div className="bg-gradient-to-r from-orange-50 to-yellow-50 border border-orange-200 rounded-2xl p-4 mb-4">
+                <p className="text-xs text-gray-500 mb-1">🔥 連続記録</p>
+                <p className="text-4xl font-bold text-orange-500">{streakDays}日</p>
+                <p className="text-sm font-medium text-gray-700 mt-1">{getStreakMessage(streakDays)}</p>
+              </div>
+            )}
+
+            <p className="text-gray-600 text-sm mb-6">
+              {isNewRecord
+                ? '今日も振り返りおつかれさま！\n続けることが一番の成長の証です。'
+                : '更新完了！引き続き頑張ろう！'}
+            </p>
+
             <div className="space-y-3">
               <button onClick={() => router.push('/player/dashboard')} className="w-full bg-brand-main text-brand-dark font-bold py-3 rounded-xl hover:bg-yellow-400 transition-colors">ダッシュボードへ</button>
               <button onClick={() => { setShowSuccess(false); setExistingRecord(true) }} className="w-full bg-white text-brand-dark font-medium py-3 rounded-xl hover:bg-gray-50 transition-colors">記録を編集する</button>

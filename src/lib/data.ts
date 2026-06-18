@@ -38,7 +38,8 @@ function generateDemoRecords(): DailyRecord[] {
   const statuses: DailyRecord['participation_status'][] = ['参加', '参加', '参加', '参加', '参加', 'リハビリ', '参加', 'REST']
 
   const now = new Date()
-  for (let dayOffset = 14; dayOffset >= 0; dayOffset--) {
+  // デモデータは過去60日分を生成する（14日で止まる問題を解消するため拡張）
+  for (let dayOffset = 60; dayOffset >= 0; dayOffset--) {
     const date = new Date(now)
     date.setDate(date.getDate() - dayOffset)
     const dateStr = date.toISOString().split('T')[0]
@@ -409,12 +410,54 @@ export async function getDailyRecords(userId: string, startDate?: string, endDat
     if (endDate) records = records.filter(r => r.record_date <= endDate)
     return records.sort((a, b) => a.record_date.localeCompare(b.record_date))
   }
-  let query = getSupabase().from('daily_records').select('*').eq('user_id', userId).order('record_date')
+  // limit() を付けず全件取得する（以前は暗黙的な上限により14件前後で止まっていた）
+  let query = getSupabase()
+    .from('daily_records')
+    .select('*')
+    .eq('user_id', userId)
+    .order('record_date', { ascending: true })
   if (startDate) query = query.gte('record_date', startDate)
   if (endDate) query = query.lte('record_date', endDate)
   const { data, error } = await query
   if (error) throw error
   return data || []
+}
+
+/**
+ * 過去の入力履歴から「連続記録日数（ストリーク）」を算出する。
+ * 判定条件: その日に daily_records が1件以上存在すること（朝夜両方入力済み）
+ * ※ 本アプリでは「デイリーノート」として朝のコンディション〜夜の振り返りを
+ *    1レコードに統合して保存する設計のため、1日1レコード完成 = 両方完了と扱う。
+ * 今日から過去に向かって走査し、1日でも欠けた場合はそこでカウントを止める。
+ * @param records 対象ユーザーの全記録（日付昇順 or 降順 どちらでもOK）
+ * @returns 現在の連続記録日数
+ */
+export function calculateStreak(records: DailyRecord[]): number {
+  if (records.length === 0) return 0
+
+  // 入力済み日付をセットに格納する
+  const recordedDates = new Set(records.map(r => r.record_date))
+
+  // 今日から昨日・一昨日と遡ってチェックする
+  let streak = 0
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+
+  for (let i = 0; i < 3650; i++) { // 最大10年遡る
+    const checkDate = new Date(today)
+    checkDate.setDate(today.getDate() - i)
+    const dateStr = checkDate.toISOString().split('T')[0]
+
+    if (recordedDates.has(dateStr)) {
+      streak++
+    } else {
+      // 今日がまだ未入力でも昨日以前の連続を維持する
+      // （今日が未入力の場合は0日目として扱い、昨日から遡る）
+      if (i === 0) continue
+      break
+    }
+  }
+  return streak
 }
 
 export async function getAllDailyRecords(startDate?: string, endDate?: string): Promise<DailyRecordWithUser[]> {
