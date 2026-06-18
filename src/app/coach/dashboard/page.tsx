@@ -75,6 +75,8 @@ export default function CoachDashboard() {
   const [allUsers, setAllUsers] = useState<User[]>([])
   const [todayRecords, setTodayRecords] = useState<DailyRecordWithUser[]>([])
   const [recentRecords, setRecentRecords] = useState<DailyRecordWithUser[]>([])
+  // 成長・達成度タブ用：全期間レコード（startDate制限なし）
+  const [allTimeRecords, setAllTimeRecords] = useState<DailyRecordWithUser[]>([])
   const [tournament, setTournament] = useState<Tournament | null>(null)
   const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'))
   const [commentInputs, setCommentInputs] = useState<Record<string, string>>({})
@@ -136,15 +138,18 @@ export default function CoachDashboard() {
 
   const loadData = async () => {
     try {
-      // コンディション・成長タブ用は過去14日間で取得
+      // コンディション・Session RPEタブ用は過去14日間で取得
       const startDate = format(subDays(new Date(), 14), 'yyyy-MM-dd')
-      const [users, records, t] = await Promise.all([
+      // 成長・達成度タブ用は全期間（startDate未指定）で取得
+      const [users, records, allRecords, t] = await Promise.all([
         getUsers(),
         getAllDailyRecords(startDate),
+        getAllDailyRecords(),
         getActiveTournament(),
       ])
       setAllUsers(users)
       setRecentRecords(records)
+      setAllTimeRecords(allRecords)
       setTournament(t)
       const todayStr = format(new Date(), 'yyyy-MM-dd')
       setTodayRecords(records.filter(r => r.record_date === todayStr))
@@ -786,7 +791,8 @@ export default function CoachDashboard() {
         {activeTab === 'growth' && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {players.map(player => {
-              const playerRecords = recentRecords.filter(r => r.user_id === player.id)
+              // 成長・達成度タブは全期間データを使用（14日制限を排除）
+              const playerRecords = allTimeRecords.filter(r => r.user_id === player.id)
               const avgEval = playerRecords.length > 0
                 ? (playerRecords.reduce((sum, r) => sum + r.self_evaluation, 0) / playerRecords.length).toFixed(1)
                 : '-'
