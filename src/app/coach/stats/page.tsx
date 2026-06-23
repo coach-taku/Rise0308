@@ -47,6 +47,8 @@ export default function CoachStatsPage() {
   // フィルタ
   const [filterPlayerName, setFilterPlayerName] = useState<string>('')
   const [filterGameType, setFilterGameType] = useState<string>('')
+  // 自チーム / 相手チームフィルタ ('all' | 'my' | 'opponent')
+  const [filterTeamSide, setFilterTeamSide] = useState<'all' | 'my' | 'opponent'>('all')
 
   // タブ切り替え
   const [activeTab, setActiveTab] = useState<'list' | 'graph' | 'import'>('list')
@@ -78,10 +80,18 @@ export default function CoachStatsPage() {
     }
   }, [])
 
+  /**
+   * player_name が「チーム名 / 選手名」形式かどうかで相手チーム選手を判定する。
+   * スラッシュ（ / ）を含む場合は対戦相手の選手。
+   */
+  const isOpponent = (playerName: string) => playerName.includes(' / ')
+
   // フィルタ後のスタッツ
   const filteredStats = stats.filter(s => {
     if (filterPlayerName && s.player_name !== filterPlayerName) return false
     if (filterGameType && s.game_type !== filterGameType) return false
+    if (filterTeamSide === 'my' && isOpponent(s.player_name)) return false
+    if (filterTeamSide === 'opponent' && !isOpponent(s.player_name)) return false
     return true
   })
 
@@ -201,9 +211,32 @@ export default function CoachStatsPage() {
                 </select>
               </div>
             </div>
-            {(filterPlayerName || filterGameType) && (
+            {/* 自チーム / 相手フィルタ */}
+            <div className="mt-3">
+              <label className="block text-xs text-gray-500 mb-1">表示対象</label>
+              <div className="flex gap-2 flex-wrap">
+                {([
+                  { value: 'all',      label: '全員' },
+                  { value: 'my',       label: '🏠 自チームのみ' },
+                  { value: 'opponent', label: '⚔️ 対戦相手のみ' },
+                ] as const).map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setFilterTeamSide(opt.value)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                      filterTeamSide === opt.value
+                        ? 'bg-brand-main text-brand-dark border-brand-main'
+                        : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {(filterPlayerName || filterGameType || filterTeamSide !== 'all') && (
               <button
-                onClick={() => { setFilterPlayerName(''); setFilterGameType('') }}
+                onClick={() => { setFilterPlayerName(''); setFilterGameType(''); setFilterTeamSide('all') }}
                 className="mt-2 text-xs text-gray-400 hover:text-gray-600 underline"
               >
                 フィルタをクリア
@@ -258,7 +291,14 @@ export default function CoachStatsPage() {
                     {/* カードヘッダー */}
                     <div className="px-4 pt-4 pb-2 flex items-center justify-between flex-wrap gap-2">
                       <div>
-                        <p className="font-bold text-gray-800">{stat.player_name}</p>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="font-bold text-gray-800">{stat.player_name}</p>
+                          {isOpponent(stat.player_name) ? (
+                            <span className="px-2 py-0.5 bg-gray-100 text-gray-500 text-xs rounded-full">⚔️ 対戦相手</span>
+                          ) : (
+                            <span className="px-2 py-0.5 bg-blue-50 text-blue-600 text-xs rounded-full">🏠 自チーム</span>
+                          )}
+                        </div>
                         <p className="text-xs text-gray-500">
                           {stat.game_date} vs {stat.opponent}
                           <span className="ml-2 bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{stat.game_type}</span>

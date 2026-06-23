@@ -80,20 +80,31 @@ export default function PlayerStatsPage() {
     }
   }, [])
 
+  /**
+   * player_name に「 / 」が含まれる場合は対戦相手の選手と判定する。
+   * 選手ページでは対戦相手データは除外し、自分のデータのみ表示する。
+   */
+  const isOpponent = (playerName: string) => playerName.includes(' / ')
+
   // selectedName が変わったとき（または allStats が変わったとき）に自分のスタッツを更新する
   useEffect(() => {
     if (!selectedName) {
       setMyStats([])
       return
     }
-    const filtered = allStats.filter(s => s.player_name === selectedName)
+    // 対戦相手のデータ（「 / 」を含むエントリ）は除外し自分のデータのみ取得
+    const filtered = allStats.filter(s =>
+      !isOpponent(s.player_name) && s.player_name === selectedName
+    )
     setMyStats(filtered)
   }, [selectedName, allStats])
 
   // 試合種別のユニークリスト
   const gameTypes = Array.from(new Set(allStats.map(s => s.game_type))).sort()
-  // 選手名のユニークリスト（チーム全体の閲覧用）
-  const playerNames = Array.from(new Set(allStats.map(s => s.player_name))).sort()
+  // 選手名のユニークリスト（対戦相手は除外し自チーム選手者のみ表示）
+  const playerNames = Array.from(
+    new Set(allStats.filter(s => !isOpponent(s.player_name)).map(s => s.player_name))
+  ).sort()
 
   // フィルタ後のスタッツ
   const filteredStats = myStats.filter(s =>
