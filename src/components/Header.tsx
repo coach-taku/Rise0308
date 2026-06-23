@@ -15,6 +15,7 @@ export default function Header({ userName, role }: { userName: string; role: 'pl
   const navItems = role === 'staff'
     ? [
         { href: '/coach/dashboard', label: 'チーム一覧' },
+        { href: '/coach/stats', label: 'スタッツ' },
         { href: '/coach/tournament', label: '大会設定' },
         { href: '/coach/users', label: 'ユーザー管理' },
       ]
@@ -23,6 +24,7 @@ export default function Header({ userName, role }: { userName: string; role: 'pl
         { href: '/player/daily', label: '日々の記録' },
         { href: '/player/mandala', label: '目標設定' },
         { href: '/player/karte', label: 'カルテ' },
+        { href: '/player/stats', label: 'スタッツ' },
         { href: '/player/timeline', label: 'グループ共有' },
       ]
 
