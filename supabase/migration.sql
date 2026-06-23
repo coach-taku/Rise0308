@@ -145,9 +145,56 @@ CREATE INDEX IF NOT EXISTS idx_practice_sessions_date ON practice_sessions(sessi
 ALTER TABLE practice_sessions DISABLE ROW LEVEL SECURITY;
 
 -- ============================================================
+-- 2026-06-23 追加: スタッツ管理機能（試合パフォーマンスデータ）
+-- ============================================================
+
+-- 9. Game Stats table（試合ごとのスタッツデータ）
+-- コーチがCSVインポートで登録し、コーチ・選手双方が閲覧する
+-- 選手とのデータ紐付けは player_name による手動管理（自動マッチングなし）
+CREATE TABLE IF NOT EXISTS game_stats (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  game_date DATE NOT NULL,                          -- 試合日
+  opponent TEXT NOT NULL DEFAULT '',                -- 対戦相手チーム名
+  game_type TEXT NOT NULL DEFAULT '練習試合',       -- 試合種別（練習試合 / 公式戦 等）
+  game_minutes INTEGER NOT NULL DEFAULT 40,         -- 試合時間（分）。PER40換算の基準値
+  player_name TEXT NOT NULL,                        -- 選手名（手動入力。usersとの自動マッチングなし）
+  -- 基本スタッツ
+  minutes_played INTEGER NOT NULL DEFAULT 0,        -- 出場時間（分）
+  points INTEGER NOT NULL DEFAULT 0,                -- 得点
+  rebounds INTEGER NOT NULL DEFAULT 0,              -- リバウンド
+  assists INTEGER NOT NULL DEFAULT 0,               -- アシスト
+  steals INTEGER NOT NULL DEFAULT 0,                -- スティール
+  blocks INTEGER NOT NULL DEFAULT 0,                -- ブロック
+  turnovers INTEGER NOT NULL DEFAULT 0,             -- ターンオーバー
+  fouls INTEGER NOT NULL DEFAULT 0,                 -- ファウル
+  -- シュートスタッツ（KPI: 3P 33% / 2P 50% / FT 75%）
+  fg3_made INTEGER NOT NULL DEFAULT 0,              -- 3P成功数
+  fg3_attempted INTEGER NOT NULL DEFAULT 0,         -- 3P試投数
+  fg2_made INTEGER NOT NULL DEFAULT 0,              -- 2P成功数
+  fg2_attempted INTEGER NOT NULL DEFAULT 0,         -- 2P試投数
+  ft_made INTEGER NOT NULL DEFAULT 0,               -- FT（フリースロー）成功数
+  ft_attempted INTEGER NOT NULL DEFAULT 0,          -- FT試投数
+  -- メタデータ
+  imported_by UUID REFERENCES users(id) ON DELETE SET NULL,  -- インポートしたコーチのuser_id
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- インデックス
+CREATE INDEX IF NOT EXISTS idx_game_stats_date ON game_stats(game_date);
+CREATE INDEX IF NOT EXISTS idx_game_stats_player ON game_stats(player_name);
+CREATE INDEX IF NOT EXISTS idx_game_stats_type ON game_stats(game_type);
+
+-- RLS 無効化（他テーブルと同様の設計方針）
+ALTER TABLE game_stats DISABLE ROW LEVEL SECURITY;
+
+-- ============================================================
 -- 既存 Supabase プロジェクトへの適用手順
 -- ============================================================
 -- Supabase SQL Editor で以下の順に実行してください:
 -- 1. 上記 CREATE TABLE 文でテーブルを作成する
--- 2. ALTER TABLE practice_sessions DISABLE ROW LEVEL SECURITY; を実行する
+-- 2. ALTER TABLE game_stats DISABLE ROW LEVEL SECURITY; を実行する
 -- ※ 手順2を忘れると保存時に「row-level security policy」エラーが発生します
+--
+-- 既存プロジェクトへの追加のみ行う場合（game_stats テーブルのみ追加）:
+-- CREATE TABLE IF NOT EXISTS game_stats (...) を実行した後、
+-- ALTER TABLE game_stats DISABLE ROW LEVEL SECURITY; を実行してください
