@@ -101,3 +101,85 @@ export interface PracticeSession {
   created_at: string
   updated_at: string
 }
+
+// ============================================================
+// スタッツ機能（試合パフォーマンス記録・分析）
+// ============================================================
+
+/**
+ * 試合（ゲーム）単位のメタ情報を保持するテーブル。
+ * コーチがCSVインポートするときに1行作成される。
+ * 試合種別（公式戦 / 練習試合 / リーグ戦 / その他）や
+ * 試合時間（分）をタグとして付与できる。
+ */
+export interface GameStat {
+  id: string
+  game_date: string           // 試合日 (YYYY-MM-DD)
+  opponent: string            // 対戦相手チーム名
+  game_type: '公式戦' | '練習試合' | 'リーグ戦' | 'その他'  // 試合種別
+  game_minutes: number        // 試合時間（分）
+  created_by: string          // 登録コーチの user_id
+  created_at: string
+}
+
+/**
+ * 選手1人×1試合のスタッツデータ。
+ * GameStat の子レコード。
+ * player_name はCSVから読み込んだ名前をそのまま保持する（手動選択との紐付けに使用）。
+ */
+export interface GameStatEntry {
+  id: string
+  game_stat_id: string        // game_stats.id への外部キー
+  player_name: string         // CSVから読み込んだ選手名（手動紐付け用）
+  user_id: string | null      // 紐付けた users.id（手動選択後にセット・null可）
+  minutes_played: number      // 出場時間（分）
+  // シュート系
+  fg_made: number             // FG成功数（フィールドゴール）
+  fg_attempted: number        // FG試投数
+  three_made: number          // 3P成功数
+  three_attempted: number     // 3P試投数
+  two_made: number            // 2P成功数（fg_made - three_made で算出可）
+  two_attempted: number       // 2P試投数（fg_attempted - three_attempted で算出可）
+  ft_made: number             // FT成功数（フリースロー）
+  ft_attempted: number        // FT試投数
+  // その他スタッツ
+  rebounds: number            // リバウンド
+  assists: number             // アシスト
+  steals: number              // スティール
+  blocks: number              // ブロック
+  turnovers: number           // ターンオーバー
+  points: number              // 得点（ft_made + two_made*2 + three_made*3 で算出可）
+  created_at: string
+}
+
+/** 表示用の型（GameStat + entries を結合したもの） */
+export interface GameStatWithEntries extends GameStat {
+  entries: GameStatEntry[]
+}
+
+/**
+ * PER40換算値（40分あたりの生産性指標）。
+ * 実際の出場時間を40分に正規化したスタッツ。
+ * フロントエンド側で計算して表示する（DBには保存しない）。
+ */
+export interface Per40Stats {
+  points: number
+  rebounds: number
+  assists: number
+  steals: number
+  blocks: number
+  turnovers: number
+  fg_pct: number              // FG成功率 (%)
+  three_pct: number           // 3P成功率 (%)
+  ft_pct: number              // FT成功率 (%)
+}
+
+/**
+ * KPI目標値（修正要件定義書に記載の基準）
+ * 3P: 33%, 2P: 50%, FT: 75%
+ */
+export const STATS_KPI = {
+  three_pct: 33,   // 3P成功率目標 (%)
+  two_pct: 50,     // 2P成功率目標 (%)
+  ft_pct: 75,      // FT成功率目標 (%)
+} as const

@@ -7,6 +7,7 @@ import { getActiveTournament, getDailyRecords, calculateStreak } from '@/lib/dat
 import { getSession } from '@/lib/session'
 import Header from '@/components/Header'
 import BottomNav from '@/components/BottomNav'
+import StatsViewer from '@/components/StatsViewer'
 import { AreaChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { format, differenceInDays, subDays, parseISO } from 'date-fns'
 import { ja } from 'date-fns/locale'
@@ -212,6 +213,13 @@ export default function PlayerDashboard() {
             </div>
           </div>
         )}
+
+        {/* スタッツ閲覧セクション */}
+        <div className="bg-white rounded-2xl p-5 shadow-sm">
+          <h3 className="text-sm font-bold text-gray-700 mb-1">🏀 スタッツ</h3>
+          <p className="text-xs text-gray-400 mb-4">試合ごとのパフォーマンスを確認できます。</p>
+          <StatsViewer mode="player" userId={user.id} />
+        </div>
 
         {/* Quick actions */}
         <div className="grid grid-cols-2 gap-3">

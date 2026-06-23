@@ -1,4 +1,4 @@
-import { User, Tournament, MandalaChart, DailyRecord, DailyRecordWithUser, Comment, PhysicalRecord, MaxTrainingRecord, PracticeSession } from '@/types/database'
+import { User, Tournament, MandalaChart, DailyRecord, DailyRecordWithUser, Comment, PhysicalRecord, MaxTrainingRecord, PracticeSession, GameStat, GameStatEntry, GameStatWithEntries } from '@/types/database'
 import { getSupabase, isSupabaseConfigured } from './supabase'
 
 // ============================================================
@@ -999,3 +999,258 @@ export async function upsertPracticeSession(
   return data
 }
 
+// ============================================================
+// スタッツ機能（試合パフォーマンス記録・分析）
+// コーチがCSVインポートし、コーチ・選手双方が閲覧できる
+// ============================================================
+
+// --- デモ用スタッツデータ（インメモリ） ---
+
+const demoGameStats: GameStat[] = [
+  {
+    id: 'game-1',
+    game_date: '2026-05-10',
+    opponent: '浦和南高校',
+    game_type: '練習試合',
+    game_minutes: 32,
+    created_by: 'staff-1',
+    created_at: '2026-05-10T12:00:00Z',
+  },
+  {
+    id: 'game-2',
+    game_date: '2026-05-24',
+    opponent: '大宮東高校',
+    game_type: '公式戦',
+    game_minutes: 40,
+    created_by: 'staff-1',
+    created_at: '2026-05-24T12:00:00Z',
+  },
+]
+
+const demoGameStatEntries: GameStatEntry[] = [
+  // game-1
+  { id: 'entry-1-1', game_stat_id: 'game-1', player_name: '山田 花子', user_id: 'player-1', minutes_played: 28, fg_made: 5, fg_attempted: 12, three_made: 2, three_attempted: 6, two_made: 3, two_attempted: 6, ft_made: 4, ft_attempted: 5, rebounds: 6, assists: 3, steals: 2, blocks: 1, turnovers: 2, points: 16, created_at: '2026-05-10T12:00:00Z' },
+  { id: 'entry-1-2', game_stat_id: 'game-1', player_name: '鈴木 美咲', user_id: 'player-2', minutes_played: 20, fg_made: 3, fg_attempted: 9,  three_made: 1, three_attempted: 4, two_made: 2, two_attempted: 5, ft_made: 2, ft_attempted: 4, rebounds: 4, assists: 5, steals: 1, blocks: 0, turnovers: 3, points:  9, created_at: '2026-05-10T12:00:00Z' },
+  { id: 'entry-1-3', game_stat_id: 'game-1', player_name: '佐藤 遥',   user_id: 'player-3', minutes_played: 18, fg_made: 4, fg_attempted: 8,  three_made: 0, three_attempted: 2, two_made: 4, two_attempted: 6, ft_made: 3, ft_attempted: 3, rebounds: 8, assists: 1, steals: 0, blocks: 3, turnovers: 1, points: 11, created_at: '2026-05-10T12:00:00Z' },
+  { id: 'entry-1-4', game_stat_id: 'game-1', player_name: '田中 結衣', user_id: 'player-4', minutes_played: 15, fg_made: 2, fg_attempted: 7,  three_made: 1, three_attempted: 3, two_made: 1, two_attempted: 4, ft_made: 1, ft_attempted: 2, rebounds: 3, assists: 2, steals: 3, blocks: 0, turnovers: 2, points:  6, created_at: '2026-05-10T12:00:00Z' },
+  // game-2
+  { id: 'entry-2-1', game_stat_id: 'game-2', player_name: '山田 花子', user_id: 'player-1', minutes_played: 35, fg_made: 7, fg_attempted: 16, three_made: 3, three_attempted: 8, two_made: 4, two_attempted: 8, ft_made: 5, ft_attempted: 6, rebounds: 7, assists: 4, steals: 3, blocks: 1, turnovers: 2, points: 22, created_at: '2026-05-24T12:00:00Z' },
+  { id: 'entry-2-2', game_stat_id: 'game-2', player_name: '鈴木 美咲', user_id: 'player-2', minutes_played: 30, fg_made: 4, fg_attempted: 11, three_made: 2, three_attempted: 6, two_made: 2, two_attempted: 5, ft_made: 3, ft_attempted: 4, rebounds: 5, assists: 6, steals: 2, blocks: 0, turnovers: 3, points: 13, created_at: '2026-05-24T12:00:00Z' },
+  { id: 'entry-2-3', game_stat_id: 'game-2', player_name: '佐藤 遥',   user_id: 'player-3', minutes_played: 25, fg_made: 5, fg_attempted: 10, three_made: 0, three_attempted: 1, two_made: 5, two_attempted: 9, ft_made: 4, ft_attempted: 4, rebounds: 10, assists: 2, steals: 0, blocks: 4, turnovers: 1, points: 14, created_at: '2026-05-24T12:00:00Z' },
+  { id: 'entry-2-4', game_stat_id: 'game-2', player_name: '田中 結衣', user_id: 'player-4', minutes_played: 20, fg_made: 3, fg_attempted: 9,  three_made: 1, three_attempted: 4, two_made: 2, two_attempted: 5, ft_made: 2, ft_attempted: 3, rebounds: 4, assists: 3, steals: 4, blocks: 0, turnovers: 2, points:  9, created_at: '2026-05-24T12:00:00Z' },
+]
+
+// --- スタッツ データアクセス関数 ---
+
+/**
+ * 全試合のメタ情報一覧を取得する（コーチ・選手双方が閲覧可能）。
+ * @returns 試合日降順でソートされた GameStat 配列
+ */
+export async function getGameStats(): Promise<GameStat[]> {
+  if (!isSupabaseConfigured()) {
+    return [...demoGameStats].sort((a, b) => b.game_date.localeCompare(a.game_date))
+  }
+  const { data, error } = await getSupabase()
+    .from('game_stats')
+    .select('*')
+    .order('game_date', { ascending: false })
+  if (error) {
+    console.error('[data] getGameStats() でエラーが発生しました:', error.message)
+    return []
+  }
+  return data || []
+}
+
+/**
+ * 指定した試合のエントリー（選手スタッツ）一覧を取得する。
+ * @param gameStatId 対象の game_stats.id
+ */
+export async function getGameStatEntries(gameStatId: string): Promise<GameStatEntry[]> {
+  if (!isSupabaseConfigured()) {
+    return demoGameStatEntries.filter(e => e.game_stat_id === gameStatId)
+  }
+  const { data, error } = await getSupabase()
+    .from('game_stat_entries')
+    .select('*')
+    .eq('game_stat_id', gameStatId)
+    .order('points', { ascending: false })
+  if (error) {
+    console.error('[data] getGameStatEntries() でエラーが発生しました:', error.message)
+    return []
+  }
+  return data || []
+}
+
+/**
+ * 指定した試合のメタ情報＋選手エントリー一覧をまとめて取得する。
+ * @param gameStatId 対象の game_stats.id
+ */
+export async function getGameStatWithEntries(gameStatId: string): Promise<GameStatWithEntries | null> {
+  const [stats, entries] = await Promise.all([
+    isSupabaseConfigured()
+      ? getSupabase().from('game_stats').select('*').eq('id', gameStatId).maybeSingle().then(r => r.data)
+      : demoGameStats.find(g => g.id === gameStatId) || null,
+    getGameStatEntries(gameStatId),
+  ])
+  if (!stats) return null
+  return { ...stats, entries }
+}
+
+/**
+ * 特定の選手（user_id）の全試合スタッツを取得する。
+ * 選手ダッシュボードの個人スタッツ表示に使用する。
+ * @param userId 対象の users.id
+ */
+export async function getPlayerGameStatEntries(userId: string): Promise<(GameStatEntry & { game?: GameStat })[]> {
+  if (!isSupabaseConfigured()) {
+    return demoGameStatEntries
+      .filter(e => e.user_id === userId)
+      .map(e => ({ ...e, game: demoGameStats.find(g => g.id === e.game_stat_id) }))
+      .sort((a, b) => (b.game?.game_date || '').localeCompare(a.game?.game_date || ''))
+  }
+  // Supabase: ネストして取得する
+  const { data, error } = await getSupabase()
+    .from('game_stat_entries')
+    .select('*, game_stats(*)')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+  if (error) {
+    console.error('[data] getPlayerGameStatEntries() でエラーが発生しました:', error.message)
+    return []
+  }
+  return (data || []).map((row: GameStatEntry & { game_stats?: GameStat }) => ({
+    ...row,
+    game: row.game_stats,
+  }))
+}
+
+/**
+ * 試合メタ情報を新規登録する（コーチ専用）。
+ * @param gameStat 登録する試合情報
+ */
+export async function createGameStat(
+  gameStat: Omit<GameStat, 'id' | 'created_at'>
+): Promise<GameStat> {
+  if (!isSupabaseConfigured()) {
+    const newGame: GameStat = {
+      id: `game-${Date.now()}`,
+      ...gameStat,
+      created_at: new Date().toISOString(),
+    }
+    demoGameStats.push(newGame)
+    return newGame
+  }
+  const { data, error } = await getSupabase()
+    .from('game_stats')
+    .insert(gameStat)
+    .select()
+    .single()
+  if (error) {
+    console.error('[data] createGameStat() でエラーが発生しました:', error.message)
+    throw error
+  }
+  return data
+}
+
+/**
+ * 選手スタッツエントリーを一括登録する（コーチ専用・CSVインポート時に呼び出す）。
+ * @param entries 登録するエントリー配列
+ */
+export async function createGameStatEntries(
+  entries: Omit<GameStatEntry, 'id' | 'created_at'>[]
+): Promise<GameStatEntry[]> {
+  if (!isSupabaseConfigured()) {
+    const newEntries: GameStatEntry[] = entries.map((e, idx) => ({
+      id: `entry-${Date.now()}-${idx}`,
+      ...e,
+      created_at: new Date().toISOString(),
+    }))
+    demoGameStatEntries.push(...newEntries)
+    return newEntries
+  }
+  const { data, error } = await getSupabase()
+    .from('game_stat_entries')
+    .insert(entries)
+    .select()
+  if (error) {
+    console.error('[data] createGameStatEntries() でエラーが発生しました:', error.message)
+    throw error
+  }
+  return data || []
+}
+
+/**
+ * エントリーの user_id を更新する（選手の手動紐付け後に呼び出す）。
+ * @param entryId 対象の game_stat_entries.id
+ * @param userId  紐付ける users.id
+ */
+export async function updateGameStatEntryUserId(entryId: string, userId: string | null): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    const idx = demoGameStatEntries.findIndex(e => e.id === entryId)
+    if (idx >= 0) demoGameStatEntries[idx] = { ...demoGameStatEntries[idx], user_id: userId }
+    return
+  }
+  const { error } = await getSupabase()
+    .from('game_stat_entries')
+    .update({ user_id: userId })
+    .eq('id', entryId)
+  if (error) {
+    console.error('[data] updateGameStatEntryUserId() でエラーが発生しました:', error.message)
+    throw error
+  }
+}
+
+/**
+ * 試合ごとのスタッツと全エントリーを削除する（コーチ専用）。
+ * @param gameStatId 削除する game_stats.id
+ */
+export async function deleteGameStat(gameStatId: string): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    const gIdx = demoGameStats.findIndex(g => g.id === gameStatId)
+    if (gIdx >= 0) demoGameStats.splice(gIdx, 1)
+    // 子エントリーも削除
+    const toRemove = demoGameStatEntries.filter(e => e.game_stat_id === gameStatId).map(e => e.id)
+    toRemove.forEach(id => {
+      const idx = demoGameStatEntries.findIndex(e => e.id === id)
+      if (idx >= 0) demoGameStatEntries.splice(idx, 1)
+    })
+    return
+  }
+  // Supabase: ON DELETE CASCADE で子エントリーも自動削除される
+  const { error } = await getSupabase()
+    .from('game_stats')
+    .delete()
+    .eq('id', gameStatId)
+  if (error) {
+    console.error('[data] deleteGameStat() でエラーが発生しました:', error.message)
+    throw error
+  }
+}
+
+// --- PER40換算ユーティリティ（フロントエンド側で使用） ---
+
+/**
+ * 40分換算スタッツ（PER40）を計算する。
+ * 出場時間が0の場合は全値0を返す。
+ * @param entry  元のスタッツエントリー
+ * @returns Per40Stats 換算値（小数第1位まで）
+ */
+export function calcPer40(entry: GameStatEntry) {
+  const min = entry.minutes_played
+  if (min === 0) {
+    return { points: 0, rebounds: 0, assists: 0, steals: 0, blocks: 0, turnovers: 0, fg_pct: 0, three_pct: 0, ft_pct: 0 }
+  }
+  const scale = 40 / min
+  const r = (v: number) => Math.round(v * scale * 10) / 10
+  return {
+    points:    r(entry.points),
+    rebounds:  r(entry.rebounds),
+    assists:   r(entry.assists),
+    steals:    r(entry.steals),
+    blocks:    r(entry.blocks),
+    turnovers: r(entry.turnovers),
+    fg_pct:    entry.fg_attempted   > 0 ? Math.round(entry.fg_made   / entry.fg_attempted   * 1000) / 10 : 0,
+    three_pct: entry.three_attempted > 0 ? Math.round(entry.three_made / entry.three_attempted * 1000) / 10 : 0,
+    ft_pct:    entry.ft_attempted   > 0 ? Math.round(entry.ft_made   / entry.ft_attempted   * 1000) / 10 : 0,
+  }
+}

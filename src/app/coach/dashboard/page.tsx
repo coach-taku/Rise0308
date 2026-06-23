@@ -7,6 +7,8 @@ import { getUsers, getAllDailyRecords, getActiveTournament, addComment, updateCo
 import { getSession } from '@/lib/session'
 import Header from '@/components/Header'
 import BottomNav from '@/components/BottomNav'
+import StatsImport from '@/components/StatsImport'
+import StatsViewer from '@/components/StatsViewer'
 import { format, parseISO, subDays } from 'date-fns'
 import { ja } from 'date-fns/locale'
 import {
@@ -88,7 +90,9 @@ export default function CoachDashboard() {
   // 編集中テキスト（commentId → テキスト）
   const [editInputs, setEditInputs] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<'condition' | 'timeline' | 'growth' | 'team' | 'karte' | 'rpe'>('condition')
+  const [activeTab, setActiveTab] = useState<'condition' | 'timeline' | 'growth' | 'team' | 'karte' | 'rpe' | 'stats'>('condition')
+  // スタッツタブ用: インポート後にビューワーを再読み込みするキー
+  const [statsRefreshKey, setStatsRefreshKey] = useState(0)
 
   // ---- Session RPEタブ用 state ----
   // コーチが入力・保存する練習時間（分）
@@ -457,7 +461,7 @@ export default function CoachDashboard() {
             </p>
           </div>
           {/* チーム推移・カルテタブでは日付セレクターを非表示（RPEタブは自前で日付管理） */}
-          {activeTab !== 'team' && activeTab !== 'karte' && activeTab !== 'rpe' && (
+          {activeTab !== 'team' && activeTab !== 'karte' && activeTab !== 'rpe' && activeTab !== 'stats' && (
             <input
               type="date"
               value={selectedDate}
@@ -476,6 +480,7 @@ export default function CoachDashboard() {
             { key: 'team',      label: 'チーム推移',     icon: '📊' },
             { key: 'karte',     label: 'カルテ',         icon: '📋' },
             { key: 'rpe',       label: 'Session RPE',    icon: '🏋️' },
+            { key: 'stats',     label: 'スタッツ',       icon: '🏀' },
           ] as const).map(tab => (
             <button
               key={tab.key}
@@ -1866,6 +1871,32 @@ function SessionRpeGraph({ sessions, records, players, days, loading, onChangeDa
             </>
           )}
         </>
+      )}
+
+      {/* ====== スタッツタブ ====== */}
+      {activeTab === 'stats' && user && (
+        <div className="space-y-6">
+          {/* CSVインポートセクション */}
+          <div className="bg-white rounded-2xl p-5 shadow-sm">
+            <h3 className="text-sm font-bold text-gray-700 mb-1">📥 CSVインポート</h3>
+            <p className="text-xs text-gray-400 mb-4">
+              試合ごとのスタッツCSVをインポートします。インポート後、選手一覧から各エントリーに選手を手動で紐付けてください。
+            </p>
+            <StatsImport
+              coachUserId={user.id}
+              onImported={() => setStatsRefreshKey(k => k + 1)}
+            />
+          </div>
+
+          {/* スタッツ閲覧セクション */}
+          <div className="bg-white rounded-2xl p-5 shadow-sm">
+            <h3 className="text-sm font-bold text-gray-700 mb-4">📊 試合スタッツ一覧</h3>
+            <StatsViewer
+              key={statsRefreshKey}
+              mode="coach"
+            />
+          </div>
+        </div>
       )}
     </div>
   )

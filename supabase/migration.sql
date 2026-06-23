@@ -151,3 +151,69 @@ ALTER TABLE practice_sessions DISABLE ROW LEVEL SECURITY;
 -- 1. 上記 CREATE TABLE 文でテーブルを作成する
 -- 2. ALTER TABLE practice_sessions DISABLE ROW LEVEL SECURITY; を実行する
 -- ※ 手順2を忘れると保存時に「row-level security policy」エラーが発生します
+
+-- ============================================================
+-- 2026-06-23 追加: スタッツ管理モジュール統合
+-- ============================================================
+-- コンディション管理アプリ RISE NOTE に試合スタッツ管理機能を統合する。
+-- コーチがCSVをインポートし、コーチ・選手双方が閲覧・分析できる。
+
+-- 9. Game Stats table（試合メタ情報）
+-- コーチがCSVインポートするときに1レコード作成される
+CREATE TABLE IF NOT EXISTS game_stats (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  game_date DATE NOT NULL,                          -- 試合日
+  opponent TEXT NOT NULL,                           -- 対戦相手チーム名
+  game_type TEXT NOT NULL DEFAULT '練習試合'
+    CHECK (game_type IN ('公式戦', '練習試合', 'リーグ戦', 'その他')),
+  game_minutes INTEGER NOT NULL DEFAULT 40
+    CHECK (game_minutes > 0),                       -- 試合時間（分）
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,  -- 登録コーチ
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- 10. Game Stat Entries table（選手1人×1試合のスタッツ）
+-- game_stats の子レコード。CSVの1行が1エントリーに対応する。
+-- player_name はCSVから読み込んだ名前をそのまま保持し、手動での選手紐付けに使用する。
+-- システムによる自動マッチングは行わない（要件定義書の制約事項に準拠）。
+CREATE TABLE IF NOT EXISTS game_stat_entries (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  game_stat_id UUID NOT NULL REFERENCES game_stats(id) ON DELETE CASCADE,
+  player_name TEXT NOT NULL,                        -- CSVから読み込んだ選手名
+  user_id UUID REFERENCES users(id) ON DELETE SET NULL,  -- 手動紐付け後にセット（NULL可）
+  minutes_played INTEGER NOT NULL DEFAULT 0 CHECK (minutes_played >= 0),  -- 出場時間（分）
+  -- シュート系
+  fg_made INTEGER NOT NULL DEFAULT 0,               -- FG成功数
+  fg_attempted INTEGER NOT NULL DEFAULT 0,          -- FG試投数
+  three_made INTEGER NOT NULL DEFAULT 0,            -- 3P成功数
+  three_attempted INTEGER NOT NULL DEFAULT 0,       -- 3P試投数
+  two_made INTEGER NOT NULL DEFAULT 0,              -- 2P成功数
+  two_attempted INTEGER NOT NULL DEFAULT 0,         -- 2P試投数
+  ft_made INTEGER NOT NULL DEFAULT 0,               -- FT成功数
+  ft_attempted INTEGER NOT NULL DEFAULT 0,          -- FT試投数
+  -- その他スタッツ
+  rebounds INTEGER NOT NULL DEFAULT 0,              -- リバウンド
+  assists INTEGER NOT NULL DEFAULT 0,               -- アシスト
+  steals INTEGER NOT NULL DEFAULT 0,                -- スティール
+  blocks INTEGER NOT NULL DEFAULT 0,                -- ブロック
+  turnovers INTEGER NOT NULL DEFAULT 0,             -- ターンオーバー
+  points INTEGER NOT NULL DEFAULT 0,                -- 得点
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- インデックス
+CREATE INDEX IF NOT EXISTS idx_game_stats_date ON game_stats(game_date DESC);
+CREATE INDEX IF NOT EXISTS idx_game_stats_created_by ON game_stats(created_by);
+CREATE INDEX IF NOT EXISTS idx_game_stat_entries_game ON game_stat_entries(game_stat_id);
+CREATE INDEX IF NOT EXISTS idx_game_stat_entries_user ON game_stat_entries(user_id);
+
+-- RLS無効化（このプロジェクトはRLSを使用しない設計）
+ALTER TABLE game_stats DISABLE ROW LEVEL SECURITY;
+ALTER TABLE game_stat_entries DISABLE ROW LEVEL SECURITY;
+
+-- ============================================================
+-- 適用手順（既存の Supabase プロジェクトへの追加）
+-- ============================================================
+-- Supabase SQL Editor でこのセクション以降の CREATE TABLE 文を実行し、
+-- ALTER TABLE xxx DISABLE ROW LEVEL SECURITY; を必ず実行してください。
+-- ※ 忘れると INSERT/SELECT 時に RLS エラーが発生します。
