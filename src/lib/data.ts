@@ -1,4 +1,4 @@
-import { User, Tournament, MandalaChart, DailyRecord, DailyRecordWithUser, Comment, PhysicalRecord, MaxTrainingRecord, PracticeSession } from '@/types/database'
+import { User, Tournament, MandalaChart, DailyRecord, DailyRecordWithUser, Comment, PhysicalRecord, MaxTrainingRecord, PracticeSession, GameStat, CsvStatRow } from '@/types/database'
 import { getSupabase, isSupabaseConfigured } from './supabase'
 
 // ============================================================
@@ -997,5 +997,302 @@ export async function upsertPracticeSession(
     throw error
   }
   return data
+}
+
+// ============================================================
+// スタッツ管理機能（試合パフォーマンスデータ）
+// コーチがCSVインポートで登録し、コーチ・選手双方が閲覧する
+// ============================================================
+
+/** デモ用スタッツデータ（インメモリ） */
+let demoGameStats: GameStat[] = [
+  {
+    id: 'stat-1',
+    game_date: '2026-05-10',
+    opponent: '〇〇高校',
+    game_type: '練習試合',
+    game_minutes: 40,
+    player_name: '山田 花子',
+    minutes_played: 28,
+    points: 14,
+    rebounds: 5,
+    assists: 3,
+    steals: 2,
+    blocks: 0,
+    turnovers: 2,
+    fouls: 3,
+    fg3_made: 2,
+    fg3_attempted: 6,
+    fg2_made: 4,
+    fg2_attempted: 8,
+    ft_made: 0,
+    ft_attempted: 0,
+    imported_by: 'staff-1',
+    created_at: '2026-05-10T00:00:00Z',
+  },
+  {
+    id: 'stat-2',
+    game_date: '2026-05-10',
+    opponent: '〇〇高校',
+    game_type: '練習試合',
+    game_minutes: 40,
+    player_name: '鈴木 美咲',
+    minutes_played: 32,
+    points: 10,
+    rebounds: 8,
+    assists: 1,
+    steals: 1,
+    blocks: 2,
+    turnovers: 3,
+    fouls: 2,
+    fg3_made: 1,
+    fg3_attempted: 4,
+    fg2_made: 4,
+    fg2_attempted: 9,
+    ft_made: 0,
+    ft_attempted: 2,
+    imported_by: 'staff-1',
+    created_at: '2026-05-10T00:00:00Z',
+  },
+  {
+    id: 'stat-3',
+    game_date: '2026-06-01',
+    opponent: '△△高校',
+    game_type: '公式戦',
+    game_minutes: 40,
+    player_name: '山田 花子',
+    minutes_played: 35,
+    points: 20,
+    rebounds: 4,
+    assists: 5,
+    steals: 3,
+    blocks: 1,
+    turnovers: 1,
+    fouls: 2,
+    fg3_made: 3,
+    fg3_attempted: 8,
+    fg2_made: 5,
+    fg2_attempted: 10,
+    ft_made: 3,
+    ft_attempted: 4,
+    imported_by: 'staff-1',
+    created_at: '2026-06-01T00:00:00Z',
+  },
+  {
+    id: 'stat-4',
+    game_date: '2026-06-01',
+    opponent: '△△高校',
+    game_type: '公式戦',
+    game_minutes: 40,
+    player_name: '佐藤 遥',
+    minutes_played: 30,
+    points: 8,
+    rebounds: 6,
+    assists: 2,
+    steals: 0,
+    blocks: 3,
+    turnovers: 2,
+    fouls: 4,
+    fg3_made: 0,
+    fg3_attempted: 2,
+    fg2_made: 4,
+    fg2_attempted: 8,
+    ft_made: 0,
+    ft_attempted: 0,
+    imported_by: 'staff-1',
+    created_at: '2026-06-01T00:00:00Z',
+  },
+]
+
+/**
+ * スタッツデータを全件取得する。
+ * @param playerName  選手名で絞り込む場合に指定（省略で全員）
+ * @param gameType    試合種別で絞り込む場合に指定（省略で全種別）
+ */
+export async function getGameStats(
+  playerName?: string,
+  gameType?: string,
+): Promise<GameStat[]> {
+  if (!isSupabaseConfigured()) {
+    let stats = [...demoGameStats]
+    if (playerName) stats = stats.filter(s => s.player_name === playerName)
+    if (gameType) stats = stats.filter(s => s.game_type === gameType)
+    return stats.sort((a, b) => b.game_date.localeCompare(a.game_date))
+  }
+
+  let query = getSupabase()
+    .from('game_stats')
+    .select('*')
+    .order('game_date', { ascending: false })
+  if (playerName) query = query.eq('player_name', playerName)
+  if (gameType) query = query.eq('game_type', gameType)
+
+  const { data, error } = await query
+  if (error) {
+    console.error('[data] getGameStats() でエラーが発生しました:', error.message)
+    return []
+  }
+  return data || []
+}
+
+/**
+ * 指定選手の試合別スタッツ推移を取得する（折れ線グラフ用）。
+ */
+export async function getPlayerGameStats(playerName: string): Promise<GameStat[]> {
+  return getGameStats(playerName)
+}
+
+/**
+ * 複数の GameStat をまとめて挿入する（CSVインポート用）。
+ * コーチ権限のみ呼び出し可能。呼び出し元で role チェックを行うこと。
+ * @param rows     バリデーション済みの挿入データ配列
+ * @param coachId  インポートしたコーチの user_id
+ */
+export async function importGameStats(
+  rows: Omit<GameStat, 'id' | 'created_at'>[],
+  coachId: string,
+): Promise<{ success: number; errors: string[] }> {
+  const errors: string[] = []
+  let success = 0
+
+  if (!isSupabaseConfigured()) {
+    // デモモード: インメモリデータに追加する
+    for (const row of rows) {
+      demoGameStats.push({
+        ...row,
+        id: `stat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        imported_by: coachId,
+        created_at: new Date().toISOString(),
+      })
+      success++
+    }
+    return { success, errors }
+  }
+
+  // Supabase: バッチ挿入する
+  const insertData = rows.map(row => ({
+    ...row,
+    imported_by: coachId,
+  }))
+  const { error } = await getSupabase().from('game_stats').insert(insertData)
+  if (error) {
+    console.error('[data] importGameStats() でエラーが発生しました:', error.message)
+    errors.push(`インポートエラー: ${error.message}`)
+    return { success: 0, errors }
+  }
+  return { success: rows.length, errors }
+}
+
+/**
+ * 指定IDのスタッツレコードを削除する（コーチ専用）。
+ */
+export async function deleteGameStat(statId: string): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    demoGameStats = demoGameStats.filter(s => s.id !== statId)
+    return
+  }
+  const { error } = await getSupabase().from('game_stats').delete().eq('id', statId)
+  if (error) {
+    console.error('[data] deleteGameStat() でエラーが発生しました:', error.message)
+    throw error
+  }
+}
+
+/**
+ * CSVの文字列データを GameStat インポート用オブジェクトに変換する。
+ * バリデーションを行い、問題のある行はエラーメッセージと共に除外する。
+ * @param rows     CSVパース後の配列（各行がオブジェクト）
+ * @param coachId  インポートするコーチの user_id
+ * @returns        バリデーション済みデータと検出エラーのリスト
+ */
+export function parseCsvToGameStats(
+  rows: CsvStatRow[],
+  coachId: string,
+): { valid: Omit<GameStat, 'id' | 'created_at'>[]; errors: string[] } {
+  const valid: Omit<GameStat, 'id' | 'created_at'>[] = []
+  const errors: string[] = []
+
+  rows.forEach((row, idx) => {
+    const lineNum = idx + 2 // ヘッダー行を1行目として行番号を表示
+
+    // 必須フィールドのチェック
+    if (!row.game_date || !row.player_name) {
+      errors.push(`${lineNum}行目: game_date または player_name が未入力です`)
+      return
+    }
+
+    // 日付形式チェック（YYYY-MM-DD）
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(row.game_date)) {
+      errors.push(`${lineNum}行目: game_date の形式が不正です（例: 2026-05-10）`)
+      return
+    }
+
+    const toNum = (val?: string, defaultVal = 0): number => {
+      const n = parseInt(val || '0', 10)
+      return isNaN(n) ? defaultVal : n
+    }
+
+    valid.push({
+      game_date: row.game_date,
+      opponent: row.opponent || '不明',
+      game_type: row.game_type || '練習試合',
+      game_minutes: toNum(row.game_minutes, 40),
+      player_name: row.player_name.trim(),
+      minutes_played: toNum(row.minutes_played),
+      points: toNum(row.points),
+      rebounds: toNum(row.rebounds),
+      assists: toNum(row.assists),
+      steals: toNum(row.steals),
+      blocks: toNum(row.blocks),
+      turnovers: toNum(row.turnovers),
+      fouls: toNum(row.fouls),
+      fg3_made: toNum(row.fg3_made),
+      fg3_attempted: toNum(row.fg3_attempted),
+      fg2_made: toNum(row.fg2_made),
+      fg2_attempted: toNum(row.fg2_attempted),
+      ft_made: toNum(row.ft_made),
+      ft_attempted: toNum(row.ft_attempted),
+      imported_by: coachId,
+    })
+  })
+
+  return { valid, errors }
+}
+
+/**
+ * PER40（40分換算）のスタッツを計算する。
+ * 出場時間が0の場合は null を返す。
+ * @param stat     元のスタッツデータ
+ * @returns        PER40換算値
+ */
+export function calcPer40(stat: GameStat) {
+  const mp = stat.minutes_played
+  if (!mp || mp <= 0) {
+    return {
+      points_per40: null,
+      rebounds_per40: null,
+      assists_per40: null,
+      steals_per40: null,
+      blocks_per40: null,
+      turnovers_per40: null,
+    }
+  }
+  const per40 = (val: number) => Math.round((val / mp) * 40 * 10) / 10
+  return {
+    points_per40: per40(stat.points),
+    rebounds_per40: per40(stat.rebounds),
+    assists_per40: per40(stat.assists),
+    steals_per40: per40(stat.steals),
+    blocks_per40: per40(stat.blocks),
+    turnovers_per40: per40(stat.turnovers),
+  }
+}
+
+/**
+ * シュート成功率（%）を計算する。試投数が0の場合は null を返す。
+ */
+export function calcPct(made: number, attempted: number): number | null {
+  if (!attempted) return null
+  return Math.round((made / attempted) * 1000) / 10
 }
 

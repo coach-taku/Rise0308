@@ -6,12 +6,13 @@ const playerNavItems = [
   { href: '/player/dashboard', label: 'ホーム', icon: '🏠' },
   { href: '/player/daily', label: '記録', icon: '✏️' },
   { href: '/player/mandala', label: '目標', icon: '🎯' },
-  { href: '/player/karte', label: 'カルテ', icon: '📋' },
+  { href: '/player/stats', label: 'スタッツ', icon: '🏀' },
   { href: '/player/timeline', label: '共有', icon: '💬' },
 ]
 
 const staffNavItems = [
   { href: '/coach/dashboard', label: 'チーム', icon: '📊' },
+  { href: '/coach/stats', label: 'スタッツ', icon: '🏀' },
   { href: '/coach/tournament', label: '大会設定', icon: '🏆' },
   { href: '/coach/users', label: 'ユーザー管理', icon: '👥' },
 ]
