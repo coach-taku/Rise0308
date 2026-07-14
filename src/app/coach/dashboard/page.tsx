@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { User, DailyRecord, DailyRecordWithUser, Tournament, PhysicalRecord, MaxTrainingRecord, PracticeSession } from '@/types/database'
-import { getUsers, getAllDailyRecords, getActiveTournament, addComment, updateComment, getTeamConditionRecords, getAllPhysicalRecords, getAllMaxTrainingRecords, getPracticeSession, getPracticeSessions, upsertPracticeSession } from '@/lib/data'
+import { getUsers, getAllDailyRecords, getActiveTournament, addComment, updateComment, getTeamConditionRecords, getAllPhysicalRecords, getAllMaxTrainingRecords, getPracticeSession, getPracticeSessions, upsertPracticeSession, getMindsetScores } from '@/lib/data'
 import { getSession } from '@/lib/session'
 import Header from '@/components/Header'
 import BottomNav from '@/components/BottomNav'
@@ -88,7 +88,14 @@ export default function CoachDashboard() {
   // 編集中テキスト（commentId → テキスト）
   const [editInputs, setEditInputs] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<'condition' | 'timeline' | 'growth' | 'team' | 'karte' | 'rpe'>('condition')
+  const [activeTab, setActiveTab] = useState<'condition' | 'timeline' | 'growth' | 'team' | 'karte' | 'rpe' | 'mindset'>('condition')
+
+  // ---- メタ認知スコアタブ用 state ----
+  // 全選手のスコア履歴（直近30日分）
+  const [mindsetRecords, setMindsetRecords] = useState<import('@/types/database').DailyRecord[]>([])
+  const [mindsetLoading, setMindsetLoading] = useState(false)
+  // グラフ表示対象の選手ID（選手カードをクリックで選択）
+  const [selectedMindsetPlayerId, setSelectedMindsetPlayerId] = useState<string | null>(null)
 
   // ---- Session RPEタブ用 state ----
   // コーチが入力・保存する練習時間（分）
@@ -297,6 +304,27 @@ export default function CoachDashboard() {
     }
   }, [activeTab, loadKarteData])
 
+  /** メタ認知タブがアクティブになったときにスコアデータを取得する */
+  const loadMindsetData = useCallback(async () => {
+    setMindsetLoading(true)
+    try {
+      const playerIds = allUsers.filter(u => u.role === 'player').map(u => u.id)
+      if (playerIds.length === 0) return
+      const records = await getMindsetScores(playerIds, 30)
+      setMindsetRecords(records)
+    } catch (e) {
+      console.error('[MindsetDashboard] データ取得エラー:', e)
+    } finally {
+      setMindsetLoading(false)
+    }
+  }, [allUsers])
+
+  useEffect(() => {
+    if (activeTab === 'mindset') {
+      loadMindsetData()
+    }
+  }, [activeTab, loadMindsetData])
+
   const handleDateChange = (date: string) => {
     setSelectedDate(date)
     setTodayRecords(recentRecords.filter(r => r.record_date === date))
@@ -476,6 +504,7 @@ export default function CoachDashboard() {
             { key: 'team',      label: 'チーム推移',     icon: '📊' },
             { key: 'karte',     label: 'カルテ',         icon: '📋' },
             { key: 'rpe',       label: 'Session RPE',    icon: '🏋️' },
+            { key: 'mindset',   label: 'メタ認知',       icon: '🧠' },
           ] as const).map(tab => (
             <button
               key={tab.key}
@@ -1225,6 +1254,18 @@ export default function CoachDashboard() {
           </div>
         )}
 
+        {/* ====== メタ認知スコアタブ ====== */}
+        {activeTab === 'mindset' && (
+          <MindsetScoreTab
+            players={players}
+            mindsetRecords={mindsetRecords}
+            loading={mindsetLoading}
+            selectedPlayerId={selectedMindsetPlayerId}
+            onSelectPlayer={setSelectedMindsetPlayerId}
+            getUserName={getUserName}
+          />
+        )}
+
       </main>
       <BottomNav role="staff" />
     </div>
@@ -1867,6 +1908,289 @@ function SessionRpeGraph({ sessions, records, players, days, loading, onChangeDa
           )}
         </>
       )}
+    </div>
+  )
+}
+
+// ============================================================
+// メタ認知スコアダッシュボード コンポーネント（2026-07-14 追加）
+// ============================================================
+
+/** スコアに対応するラベルを返す */
+function getMindsetLabel(score: number): string {
+  const labels: Record<number, string> = {
+    1: '固定マインドセット',
+    2: '成長の芽生え',
+    3: 'グロースマインドセット',
+    4: '深いメタ認知',
+  }
+  return labels[score] || '-'
+}
+
+/** スコアに対応する色クラスを返す（テキスト色） */
+function getMindsetColor(score: number): string {
+  if (score <= 1) return 'text-red-500'
+  if (score <= 2) return 'text-orange-500'
+  if (score <= 3) return 'text-blue-500'
+  return 'text-green-600'
+}
+
+/** スコアに対応する背景色クラスを返す */
+function getMindsetBgColor(score: number): string {
+  if (score <= 1) return 'bg-red-50 border-red-300'
+  if (score <= 2) return 'bg-orange-50 border-orange-300'
+  if (score <= 3) return 'bg-blue-50 border-blue-200'
+  return 'bg-green-50 border-green-300'
+}
+
+interface MindsetScoreTabProps {
+  players: User[]
+  mindsetRecords: import('@/types/database').DailyRecord[]
+  loading: boolean
+  selectedPlayerId: string | null
+  onSelectPlayer: (id: string | null) => void
+  getUserName: (userId: string) => string
+}
+
+function MindsetScoreTab({
+  players,
+  mindsetRecords,
+  loading,
+  selectedPlayerId,
+  onSelectPlayer,
+  getUserName,
+}: MindsetScoreTabProps) {
+  // 選手ごとに最新スコアと7日平均スコアを計算する
+  const playerStats = players.map(player => {
+    const records = mindsetRecords
+      .filter(r => r.user_id === player.id && r.mindset_score != null)
+      .sort((a, b) => b.record_date.localeCompare(a.record_date))
+
+    const latestRecord = records[0] || null
+    const latestScore = latestRecord?.mindset_score ?? null
+    const latestFeedback = latestRecord?.mindset_feedback ?? null
+
+    // 過去7日分の平均を計算する
+    const sevenDaysAgo = new Date()
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6)
+    const sevenDayStr = sevenDaysAgo.toISOString().split('T')[0]
+    const recentRecords = records.filter(r => r.record_date >= sevenDayStr)
+    const avg7day =
+      recentRecords.length > 0
+        ? Math.round(
+            (recentRecords.reduce((s, r) => s + (r.mindset_score ?? 0), 0) /
+              recentRecords.length) *
+              10
+          ) / 10
+        : null
+
+    return { player, latestScore, latestFeedback, avg7day, recordCount: records.length }
+  })
+
+  // 要サポート（スコア2以下）の選手を先に表示する
+  const sortedStats = [...playerStats].sort((a, b) => {
+    const aScore = a.latestScore ?? 5  // スコアなしは中間扱い
+    const bScore = b.latestScore ?? 5
+    return aScore - bScore  // 低いスコア（要サポート）を先頭に
+  })
+
+  // 選択選手のスコア推移グラフデータを生成する
+  const selectedPlayerRecords = selectedPlayerId
+    ? mindsetRecords
+        .filter(r => r.user_id === selectedPlayerId && r.mindset_score != null)
+        .sort((a, b) => a.record_date.localeCompare(b.record_date))
+        .map(r => ({
+          date: format(parseISO(r.record_date), 'M/d'),
+          rawDate: r.record_date,
+          score: r.mindset_score,
+        }))
+    : []
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <div className="animate-pulse text-brand-main font-bold">データ読み込み中...</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+
+      {/* ---- 説明パネル ---- */}
+      <div className="bg-white rounded-2xl p-4 shadow-sm">
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-xl">🧠</span>
+          <h3 className="text-sm font-bold text-gray-700">メタ認知スコア ダッシュボード</h3>
+        </div>
+        <p className="text-xs text-gray-500 leading-relaxed">
+          選手の振り返りテキストをAIが分析し、「グロースマインドセット」への変容度を1〜4段階で自動判定します。
+          スコアが低い選手（要サポート表示）には積極的な声かけをお勧めします。
+        </p>
+        {/* スコア凡例 */}
+        <div className="grid grid-cols-2 gap-1.5 mt-3">
+          {[
+            { score: 1, label: '固定マインドセット', desc: '事象の羅列・能力帰属', color: 'bg-red-100 text-red-700' },
+            { score: 2, label: '成長の芽生え', desc: '課題認識あり・改善策曖昧', color: 'bg-orange-100 text-orange-700' },
+            { score: 3, label: 'グロースマインドセット', desc: '具体的改善策を記述', color: 'bg-blue-100 text-blue-700' },
+            { score: 4, label: '深いメタ認知', desc: 'Plan Bを戦略的に立案', color: 'bg-green-100 text-green-700' },
+          ].map(item => (
+            <div key={item.score} className={`rounded-lg px-3 py-2 ${item.color}`}>
+              <p className="text-xs font-bold">Lv.{item.score} {item.label}</p>
+              <p className="text-xs opacity-80 mt-0.5">{item.desc}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ---- 選手スコア一覧 ---- */}
+      <div className="space-y-3">
+        {sortedStats.length === 0 && (
+          <div className="bg-white rounded-2xl p-10 shadow-sm text-center text-gray-400">
+            <p className="text-3xl mb-2">📭</p>
+            <p className="text-sm">スコアデータがありません</p>
+            <p className="text-xs mt-1">選手がデイリーノートを記録するとAIが自動で分析します</p>
+          </div>
+        )}
+
+        {sortedStats.map(({ player, latestScore, latestFeedback, avg7day, recordCount }) => {
+          const isAlert = latestScore !== null && latestScore <= 2
+          const isSelected = selectedPlayerId === player.id
+
+          return (
+            <div
+              key={player.id}
+              onClick={() => onSelectPlayer(isSelected ? null : player.id)}
+              className={`bg-white rounded-xl p-4 shadow-sm border-l-4 cursor-pointer transition-all hover:shadow-md ${
+                isAlert ? 'border-orange-400' : 'border-green-400'
+              } ${isSelected ? 'ring-2 ring-brand-main' : ''}`}
+            >
+              <div className="flex items-start justify-between gap-2">
+                {/* 左: 選手情報 */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <p className="text-sm font-semibold text-gray-800">{player.name}</p>
+                    {/* 要サポートアラート */}
+                    {isAlert && (
+                      <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-medium whitespace-nowrap">
+                        要サポート ⚠️
+                      </span>
+                    )}
+                  </div>
+
+                  {/* スコア表示 */}
+                  {latestScore !== null ? (
+                    <>
+                      <div className="flex items-center gap-3 mb-1.5">
+                        <span className={`text-2xl font-bold ${getMindsetColor(latestScore)}`}>
+                          Lv.{latestScore}
+                        </span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full border ${getMindsetBgColor(latestScore)} ${getMindsetColor(latestScore)} font-medium`}>
+                          {getMindsetLabel(latestScore)}
+                        </span>
+                      </div>
+                      {/* AIフィードバック */}
+                      {latestFeedback && (
+                        <p className="text-xs text-gray-500 leading-relaxed bg-gray-50 rounded-lg px-3 py-2 border border-gray-100">
+                          💬 {latestFeedback}
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-xs text-gray-400">まだスコアリング済みの記録がありません</p>
+                  )}
+                </div>
+
+                {/* 右: 統計数値 */}
+                <div className="text-right flex-shrink-0">
+                  {avg7day !== null && (
+                    <div className="mb-1">
+                      <p className={`text-lg font-bold ${getMindsetColor(Math.round(avg7day))}`}>
+                        {avg7day.toFixed(1)}
+                      </p>
+                      <p className="text-xs text-gray-400">7日平均</p>
+                    </div>
+                  )}
+                  <p className="text-xs text-gray-400">{recordCount}件</p>
+                </div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* ---- 選択選手のスコア推移グラフ ---- */}
+      {selectedPlayerId && (
+        <div className="bg-white rounded-2xl p-5 shadow-sm">
+          <h3 className="text-sm font-bold text-gray-700 mb-1">
+            📈 {getUserName(selectedPlayerId)} のスコア推移（過去30日間）
+          </h3>
+          <p className="text-xs text-gray-400 mb-4">
+            Y軸の点線（Lv.2）は「要サポートライン」です。継続してLv.2以下の場合は声かけを検討してください。
+          </p>
+
+          {selectedPlayerRecords.length === 0 ? (
+            <div className="text-center py-10 text-gray-400">
+              <p className="text-3xl mb-2">📭</p>
+              <p className="text-sm">この選手のスコアデータがまだありません</p>
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={240}>
+              <LineChart data={selectedPlayerRecords} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                <XAxis dataKey="date" tick={{ fontSize: 10 }} />
+                <YAxis
+                  domain={[0, 4]}
+                  ticks={[1, 2, 3, 4]}
+                  tick={{ fontSize: 11 }}
+                  tickFormatter={(v) => `Lv.${v}`}
+                />
+                <Tooltip
+                  contentStyle={{ borderRadius: '8px', fontSize: '12px' }}
+                  formatter={(value) => [`Lv.${value} ${getMindsetLabel(Number(value))}`, 'メタ認知スコア']}
+                  labelFormatter={(label) => `📅 ${label}`}
+                />
+                {/* 要サポートライン（スコア2）の参照線 */}
+                <Line
+                  type="monotone"
+                  dataKey={() => 2}
+                  name="要サポートライン"
+                  stroke="#f97316"
+                  strokeWidth={1.5}
+                  strokeDasharray="6 3"
+                  dot={false}
+                  legendType="none"
+                />
+                {/* スコア推移 */}
+                <Line
+                  type="monotone"
+                  dataKey="score"
+                  name="メタ認知スコア"
+                  stroke="#6366f1"
+                  strokeWidth={2.5}
+                  dot={{ r: 4, fill: '#6366f1', strokeWidth: 0 }}
+                  activeDot={{ r: 6 }}
+                  connectNulls={false}
+                />
+                <Legend wrapperStyle={{ fontSize: '11px' }} />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+
+          {/* 凡例補足 */}
+          <div className="flex flex-wrap gap-3 mt-3 text-xs text-gray-400 justify-end">
+            <span className="flex items-center gap-1">
+              <span className="inline-block w-4 h-0.5 bg-orange-400 rounded" style={{ borderTop: '2px dashed #f97316' }} />
+              点線: 要サポートライン（Lv.2）
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="inline-block w-4 h-0.5 bg-indigo-500 rounded" />
+              実線: メタ認知スコア推移
+            </span>
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }
