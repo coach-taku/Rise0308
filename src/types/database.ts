@@ -40,6 +40,13 @@ export interface DailyRecord {
   reflection: string
   points: number
   created_at: string
+  // ============================================================
+  // グロースマインドセット自動スコアリング（2026-07-14 追加）
+  // LLMによる判定結果。振り返り保存時にサーバーサイドAPIが非同期で設定する。
+  // 未スコアリングの場合は null。
+  // ============================================================
+  mindset_score?: number | null    // 1〜4 の整数スコア（1:固定 → 4:深いメタ認知）
+  mindset_feedback?: string | null // LLMが生成した判定理由テキスト
 }
 
 export interface Comment {

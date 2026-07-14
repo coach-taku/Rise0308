@@ -1259,6 +1259,73 @@ export function parseCsvToGameStats(
   return { valid, errors }
 }
 
+// ============================================================
+// グロースマインドセット スコアリング機能（2026-07-14 追加）
+// コーチ向けダッシュボードでの集計・表示に使用する
+// ============================================================
+
+/**
+ * 指定選手・期間のメタ認知スコアを daily_records から取得する。
+ * コーチ向けダッシュボードのスコア一覧・グラフ描画に使用する。
+ * @param userIds 対象選手のIDリスト
+ * @param days    取得期間（日数）
+ */
+export async function getMindsetScores(
+  userIds: string[],
+  days: number
+): Promise<DailyRecord[]> {
+  if (userIds.length === 0) return []
+
+  const endDate = new Date()
+  const startDate = new Date()
+  startDate.setDate(startDate.getDate() - (days - 1))
+  const startStr = startDate.toISOString().split('T')[0]
+  const endStr = endDate.toISOString().split('T')[0]
+
+  // デモモードの場合はデモデータにダミースコアを付与して返す
+  if (!isSupabaseConfigured()) {
+    const records = demoRecords.filter(
+      r =>
+        userIds.includes(r.user_id) &&
+        r.record_date >= startStr &&
+        r.record_date <= endStr &&
+        r.reflection.trim().length > 0
+    )
+    // デモ用スコアを擬似的に割り当てる（ランダム1〜4）
+    return records.map(r => ({
+      ...r,
+      mindset_score: (Math.floor(Math.random() * 4) + 1) as 1 | 2 | 3 | 4,
+      mindset_feedback: generateDemoFeedback(Math.floor(Math.random() * 4) + 1),
+    }))
+  }
+
+  const { data, error } = await getSupabase()
+    .from('daily_records')
+    .select('*')
+    .in('user_id', userIds)
+    .gte('record_date', startStr)
+    .lte('record_date', endStr)
+    .not('mindset_score', 'is', null)
+    .order('record_date', { ascending: false })
+
+  if (error) {
+    console.error('[data] getMindsetScores() でエラーが発生しました:', error.message)
+    return []
+  }
+  return data || []
+}
+
+/** デモ用フィードバックテキストを生成する */
+function generateDemoFeedback(score: number): string {
+  const feedbacks: Record<number, string> = {
+    1: '練習内容の羅列になっています。「なぜそうなったか」という原因分析を加えてみましょう。',
+    2: '課題の認識はできています。「どのように改善するか」という具体策を書いてみましょう。',
+    3: '失敗を学びに変える視点が持てています。さらに「なぜその対策が有効か」を考えると深まります。',
+    4: '自己の思考プロセスを客観視し、戦略的な改善計画を立てられています。素晴らしいメタ認知です！',
+  }
+  return feedbacks[score] || ''
+}
+
 /**
  * PER40（40分換算）のスタッツを計算する。
  * 出場時間が0の場合は null を返す。

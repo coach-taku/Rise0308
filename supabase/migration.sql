@@ -188,6 +188,22 @@ CREATE INDEX IF NOT EXISTS idx_game_stats_type ON game_stats(game_type);
 ALTER TABLE game_stats DISABLE ROW LEVEL SECURITY;
 
 -- ============================================================
+-- 2026-07-14 追加: グロースマインドセット自動スコアリング機能
+-- ============================================================
+-- daily_records テーブルへのカラム追加（既存データへの破壊的変更なし）
+-- LLM（Gemini API）が振り返りテキストを判定し、スコアとフィードバックを保存する
+-- スコアリングはサーバーサイド（Route Handler）のみで実行し、APIキーは絶対にクライアント側へ露出しない
+
+-- mindset_score: 1〜4 の整数（1:固定マインドセット → 4:深いメタ認知）。未スコアリングは NULL
+ALTER TABLE daily_records ADD COLUMN IF NOT EXISTS mindset_score SMALLINT CHECK (mindset_score BETWEEN 1 AND 4);
+
+-- mindset_feedback: LLMが生成した判定理由テキスト。未スコアリングは NULL
+ALTER TABLE daily_records ADD COLUMN IF NOT EXISTS mindset_feedback TEXT;
+
+-- インデックス（ダッシュボードでスコアによる絞り込みを行う想定）
+CREATE INDEX IF NOT EXISTS idx_daily_records_mindset ON daily_records(mindset_score);
+
+-- ============================================================
 -- 既存 Supabase プロジェクトへの適用手順
 -- ============================================================
 -- Supabase SQL Editor で以下の順に実行してください:
@@ -198,3 +214,9 @@ ALTER TABLE game_stats DISABLE ROW LEVEL SECURITY;
 -- 既存プロジェクトへの追加のみ行う場合（game_stats テーブルのみ追加）:
 -- CREATE TABLE IF NOT EXISTS game_stats (...) を実行した後、
 -- ALTER TABLE game_stats DISABLE ROW LEVEL SECURITY; を実行してください
+--
+-- 【2026-07-14 追加分の適用】
+-- 既存の Supabase プロジェクトに mindset スコア機能を追加する場合:
+-- ALTER TABLE daily_records ADD COLUMN IF NOT EXISTS mindset_score SMALLINT CHECK (mindset_score BETWEEN 1 AND 4);
+-- ALTER TABLE daily_records ADD COLUMN IF NOT EXISTS mindset_feedback TEXT;
+-- CREATE INDEX IF NOT EXISTS idx_daily_records_mindset ON daily_records(mindset_score);

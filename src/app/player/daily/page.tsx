@@ -103,7 +103,7 @@ export default function DailyInputPage() {
     try {
       const pts = calculatePoints(reflection)
       setEarnedPoints(pts)
-      await saveDailyRecord({
+      const savedRecord = await saveDailyRecord({
         user_id: user.id, record_date: recordDate, sleep_hours: sleepHours, fatigue_level: fatigueLevel,
         has_pain: hasPain, pain_detail: painDetail, participation_status: participationStatus,
         target_items: targetItems, self_evaluation: selfEvaluation, reflection, points: pts,
@@ -117,6 +117,24 @@ export default function DailyInputPage() {
       } catch (e) {
         console.error('[daily] ストリーク計算に失敗しました:', e)
         setStreakDays(0)
+      }
+
+      // ============================================================
+      // グロースマインドセット自動スコアリング（2026-07-14 追加）
+      // 新規記録かつ振り返りテキストが入力されている場合にのみ実行する。
+      // スコアリングはバックグラウンドで非同期実行（UIをブロックしない）。
+      // APIキーはサーバーサイドの Route Handler 内でのみ使用される。
+      // ============================================================
+      if (wasNewRecord && reflection.trim().length >= 20) {
+        // fire-and-forget（エラーになっても保存完了は通知済みなので握りつぶす）
+        fetch('/api/scoring', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ recordId: savedRecord.id, reflection: reflection.trim() }),
+        }).catch(e => {
+          // スコアリング失敗はサイレントエラーとする（保存自体は完了している）
+          console.warn('[daily] スコアリングAPI呼び出しに失敗しました:', e)
+        })
       }
 
       setIsNewRecord(wasNewRecord)
