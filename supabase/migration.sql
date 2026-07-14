@@ -204,6 +204,65 @@ ALTER TABLE daily_records ADD COLUMN IF NOT EXISTS mindset_feedback TEXT;
 CREATE INDEX IF NOT EXISTS idx_daily_records_mindset ON daily_records(mindset_score);
 
 -- ============================================================
+-- 2026-07-14 追加: マンダラチャート大会周期アーカイブ・目標更新機能
+-- ============================================================
+
+-- mandala_charts テーブルにアーカイブ管理カラムを追加
+-- term_label: 対象大会ターム（例: "2026年 インターハイ予選"）
+-- status: アクティブ（active）またはアーカイブ済み（archived）
+-- archived_at: アーカイブした日時（アーカイブ後に設定）
+ALTER TABLE mandala_charts ADD COLUMN IF NOT EXISTS term_label TEXT;
+ALTER TABLE mandala_charts ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived'));
+ALTER TABLE mandala_charts ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+
+-- インデックス（アクティブなチャートを高速に取得するため）
+CREATE INDEX IF NOT EXISTS idx_mandala_charts_status ON mandala_charts(user_id, status);
+
+-- ============================================================
+-- 10. Mandala Reflections table（大会後リフレクション）
+-- 新しいマンダラチャートを作成する前に記録する振り返りデータ
+-- ============================================================
+CREATE TABLE IF NOT EXISTS mandala_reflections (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  mandala_chart_id UUID NOT NULL REFERENCES mandala_charts(id) ON DELETE CASCADE,  -- 振り返り対象のチャート
+  term_label TEXT NOT NULL,           -- 対象大会ターム（例: "2026年 インターハイ予選"）
+  achievement_note TEXT NOT NULL DEFAULT '',   -- 達成度・成果のメモ
+  challenges TEXT NOT NULL DEFAULT '',         -- 次期への課題
+  plan_b TEXT NOT NULL DEFAULT '',             -- 具体的なPlan B（改善行動戦略）
+  mindset_score SMALLINT CHECK (mindset_score BETWEEN 1 AND 4),  -- LLMメタ認知スコア（1〜4）
+  mindset_feedback TEXT,                       -- LLMフィードバックテキスト
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- インデックス
+CREATE INDEX IF NOT EXISTS idx_mandala_reflections_user ON mandala_reflections(user_id);
+CREATE INDEX IF NOT EXISTS idx_mandala_reflections_chart ON mandala_reflections(mandala_chart_id);
+
+-- RLS 無効化（他テーブルと同様の設計方針）
+ALTER TABLE mandala_reflections DISABLE ROW LEVEL SECURITY;
+
+-- ============================================================
+-- 11. Goal Update Phases table（目標更新フェーズ管理）
+-- コーチが「次期目標設定フェーズ」を開始するためのフラグテーブル
+-- ============================================================
+CREATE TABLE IF NOT EXISTS goal_update_phases (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  term_label TEXT NOT NULL,          -- 大会ターム名（例: "2026年 インターハイ予選"）
+  is_active BOOLEAN NOT NULL DEFAULT true,  -- フェーズが有効かどうか
+  started_by UUID REFERENCES users(id) ON DELETE SET NULL,  -- 開始したコーチのuser_id
+  started_at TIMESTAMPTZ DEFAULT now(),     -- 開始日時
+  ended_at TIMESTAMPTZ,                     -- 終了日時（フェーズ終了後に設定）
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- インデックス（アクティブなフェーズを高速取得するため）
+CREATE INDEX IF NOT EXISTS idx_goal_update_phases_active ON goal_update_phases(is_active);
+
+-- RLS 無効化（他テーブルと同様の設計方針）
+ALTER TABLE goal_update_phases DISABLE ROW LEVEL SECURITY;
+
+-- ============================================================
 -- 既存 Supabase プロジェクトへの適用手順
 -- ============================================================
 -- Supabase SQL Editor で以下の順に実行してください:
@@ -220,3 +279,11 @@ CREATE INDEX IF NOT EXISTS idx_daily_records_mindset ON daily_records(mindset_sc
 -- ALTER TABLE daily_records ADD COLUMN IF NOT EXISTS mindset_score SMALLINT CHECK (mindset_score BETWEEN 1 AND 4);
 -- ALTER TABLE daily_records ADD COLUMN IF NOT EXISTS mindset_feedback TEXT;
 -- CREATE INDEX IF NOT EXISTS idx_daily_records_mindset ON daily_records(mindset_score);
+--
+-- 【2026-07-14 追加分（アーカイブ・更新フェーズ）の適用】
+-- 既存の Supabase プロジェクトにマンダラチャートアーカイブ機能を追加する場合:
+-- ALTER TABLE mandala_charts ADD COLUMN IF NOT EXISTS term_label TEXT;
+-- ALTER TABLE mandala_charts ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived'));
+-- ALTER TABLE mandala_charts ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+-- CREATE INDEX IF NOT EXISTS idx_mandala_charts_status ON mandala_charts(user_id, status);
+-- 続けて mandala_reflections / goal_update_phases の CREATE TABLE を実行し、RLS を無効化してください。

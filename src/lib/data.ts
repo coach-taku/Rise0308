@@ -1,4 +1,4 @@
-import { User, Tournament, MandalaChart, DailyRecord, DailyRecordWithUser, Comment, PhysicalRecord, MaxTrainingRecord, PracticeSession, GameStat, CsvStatRow } from '@/types/database'
+import { User, Tournament, MandalaChart, MandalaReflection, GoalUpdatePhase, DailyRecord, DailyRecordWithUser, Comment, PhysicalRecord, MaxTrainingRecord, PracticeSession, GameStat, CsvStatRow } from '@/types/database'
 import { getSupabase, isSupabaseConfigured } from './supabase'
 
 // ============================================================
@@ -137,6 +137,53 @@ let demoComments = generateDemoComments(demoRecords)
 const demoUsers = [...DEMO_USERS]
 const demoTournaments = [...DEMO_TOURNAMENTS]
 let demoMandala: Record<string, MandalaChart> = { 'player-1': DEMO_MANDALA }
+
+// ============================================================
+// デモ用アーカイブ・振り返りデータ
+// ============================================================
+/** デモ用アーカイブ済みマンダラチャート */
+let demoMandalaArchives: MandalaChart[] = [
+  {
+    id: 'mandala-archive-1',
+    user_id: 'player-1',
+    core_goal: '新人大会ベスト8進出',
+    elements: ['シュート力', 'ディフェンス', '体力', 'パス・連携', 'メンタル', '知識・戦術', 'チームワーク', '生活習慣'],
+    actions: [
+      ['フリースロー成功率80%', 'ミドルシュート改善', '3P練習', '毎日100本シュート', 'フォーム確認', 'ゲームでの判断', '自信をつける', 'シュート統計記録'],
+      ['1on1強化', 'スライドステップ', 'ヘルプDF', 'コミュニケーション', 'スクリーンアウト', 'ローテーション', 'DF意識向上', 'ポジショニング'],
+      ['持久走5km', '体幹毎日', '下半身強化', 'アジリティ', 'ストレッチ', '食事管理', 'ランニング', '疲労回復'],
+      ['パス精度UP', 'バウンドパス', 'ロングパス', '速攻判断', 'ピック連携', 'アシスト意識', '2on1判断', 'パスフェイク'],
+      ['試合集中', 'ミス引きずらない', '声出し', '自信', 'チーム鼓舞', 'ポジティブ', 'イメトレ', 'ルーティン'],
+      ['相手分析', 'NBA動画', 'セットプレー', 'ゾーンDF対策', 'プレスブレイク', 'タイムアウト後', 'ルール理解', '戦術ノート'],
+      ['仲間を褒める', '弱点補い合う', '練習中声かけ', 'ベンチ応援', '後輩面倒', '先輩から学ぶ', '目標共有', '信頼構築'],
+      ['早寝早起き', '栄養バランス', '水分補給', '睡眠7時間', '学業両立', '時間管理', 'ケガ予防', '体重管理'],
+    ],
+    target_date: '2026-01-20',
+    created_at: '2025-10-01T00:00:00Z',
+    term_label: '2026年 新人大会埼玉県予選',
+    status: 'archived',
+    archived_at: '2026-01-21T00:00:00Z',
+  },
+]
+
+/** デモ用振り返りデータ */
+let demoReflections: MandalaReflection[] = [
+  {
+    id: 'reflection-1',
+    user_id: 'player-1',
+    mandala_chart_id: 'mandala-archive-1',
+    term_label: '2026年 新人大会埼玉県予選',
+    achievement_note: 'フリースロー成功率が目標の80%に届かなかったが、ゲーム中の判断力は向上した。チームとしてベスト16まで進めた。',
+    challenges: 'プレッシャー場面でのシュートが弱い。ディフェンスの連携がまだ不十分。',
+    plan_b: 'プレッシャーシュート練習を週3回取り入れる。コミュニケーション練習を毎回の練習後に実施する。',
+    mindset_score: 3,
+    mindset_feedback: '失敗を学びに変える視点が持てています。Plan Bも具体的で実行可能です。',
+    created_at: '2026-01-21T00:00:00Z',
+  },
+]
+
+/** デモ用目標更新フェーズデータ */
+let demoGoalUpdatePhases: GoalUpdatePhase[] = []
 
 // ============================================================
 // Data access functions
@@ -392,6 +439,9 @@ export async function saveMandalaChart(chart: Partial<MandalaChart> & { user_id:
       actions: chart.actions || Array(8).fill(null).map(() => Array(8).fill('')),
       target_date: chart.target_date || null,
       created_at: new Date().toISOString(),
+      term_label: chart.term_label || null,
+      status: chart.status || 'active',
+      archived_at: chart.archived_at || null,
     }
     demoMandala[chart.user_id] = newChart
     return newChart
@@ -399,6 +449,283 @@ export async function saveMandalaChart(chart: Partial<MandalaChart> & { user_id:
   const { data, error } = await getSupabase().from('mandala_charts').upsert(chart).select().single()
   if (error) throw error
   return data
+}
+
+// ============================================================
+// マンダラチャート履歴（アーカイブ）機能（今回追加）
+// ============================================================
+
+/**
+ * 指定ユーザーのアーカイブ済みマンダラチャート一覧を取得する。
+ * 生徒が過去の目標（成長の軌跡）をいつでも閲覧できるようにする。
+ */
+export async function getArchivedMandalaCharts(userId: string): Promise<MandalaChart[]> {
+  if (!isSupabaseConfigured()) {
+    return demoMandalaArchives
+      .filter(c => c.user_id === userId)
+      .sort((a, b) => (b.archived_at || b.created_at).localeCompare(a.archived_at || a.created_at))
+  }
+  const { data, error } = await getSupabase()
+    .from('mandala_charts')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('status', 'archived')
+    .order('archived_at', { ascending: false })
+  if (error) {
+    console.error('[data] getArchivedMandalaCharts() でエラーが発生しました:', error.message)
+    return []
+  }
+  return data || []
+}
+
+/**
+ * アクティブなマンダラチャートをアーカイブし、新しいアクティブチャートを作成する。
+ * タイムラインへの自動投稿も合わせて実行する。
+ * @param userId      対象選手のuser_id
+ * @param newChart    新しいマンダラチャートのデータ
+ * @param termLabel   アーカイブするターム名
+ */
+export async function archiveAndCreateMandalaChart(
+  userId: string,
+  newChart: Omit<MandalaChart, 'id' | 'created_at' | 'status' | 'archived_at'>,
+  termLabel: string,
+): Promise<MandalaChart> {
+  if (!isSupabaseConfigured()) {
+    // 既存のアクティブチャートをアーカイブする
+    const existing = demoMandala[userId]
+    if (existing) {
+      const archived: MandalaChart = {
+        ...existing,
+        status: 'archived',
+        term_label: termLabel,
+        archived_at: new Date().toISOString(),
+      }
+      demoMandalaArchives.push(archived)
+    }
+    // 新しいチャートを作成する
+    const created: MandalaChart = {
+      id: `mandala-${Date.now()}`,
+      user_id: userId,
+      core_goal: newChart.core_goal,
+      elements: newChart.elements,
+      actions: newChart.actions,
+      target_date: newChart.target_date || null,
+      created_at: new Date().toISOString(),
+      term_label: newChart.term_label || null,
+      status: 'active',
+      archived_at: null,
+    }
+    demoMandala[userId] = created
+    return created
+  }
+
+  // Supabase: 既存のアクティブチャートをアーカイブし、新チャートをinsertする
+  const supabase = getSupabase()
+  const now = new Date().toISOString()
+
+  // 1. 既存のアクティブチャートをアーカイブする
+  await supabase
+    .from('mandala_charts')
+    .update({ status: 'archived', term_label: termLabel, archived_at: now })
+    .eq('user_id', userId)
+    .eq('status', 'active')
+
+  // 2. 新しいチャートをinsertする（upsertではなくinsert）
+  const { data, error } = await supabase
+    .from('mandala_charts')
+    .insert({
+      ...newChart,
+      user_id: userId,
+      status: 'active',
+      created_at: now,
+    })
+    .select()
+    .single()
+
+  if (error) {
+    console.error('[data] archiveAndCreateMandalaChart() でエラーが発生しました:', error.message)
+    throw error
+  }
+
+  // 3. タイムラインに自動投稿する（新目標設定の共有）
+  try {
+    const termText = newChart.term_label ? `【${newChart.term_label}】` : ''
+    const postContent = `${termText}新しいマンダラチャートを設定しました！\nコア目標: 「${newChart.core_goal}」\n目標に向かって全力で頑張ります！💪`
+    await supabase
+      .from('timeline_posts')
+      .insert({ user_id: userId, content: postContent })
+  } catch (e) {
+    // タイムライン投稿の失敗はエラーにしない（チャート保存は成功とする）
+    console.warn('[data] タイムライン自動投稿に失敗しました:', e)
+  }
+
+  return data
+}
+
+// ============================================================
+// マンダラチャート振り返り（大会後リフレクション）機能（今回追加）
+// ============================================================
+
+/**
+ * 指定ユーザーの振り返りデータを取得する。
+ * @param userId 対象ユーザーのID
+ */
+export async function getMandalaReflections(userId: string): Promise<MandalaReflection[]> {
+  if (!isSupabaseConfigured()) {
+    return demoReflections
+      .filter(r => r.user_id === userId)
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
+  }
+  const { data, error } = await getSupabase()
+    .from('mandala_reflections')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+  if (error) {
+    console.error('[data] getMandalaReflections() でエラーが発生しました:', error.message)
+    return []
+  }
+  return data || []
+}
+
+/**
+ * 大会後の振り返りを保存する。
+ * 保存後、LLM（/api/scoring）へのメタ認知スコアリングを非同期で実行する。
+ * @param reflection 振り返りデータ（id・created_at 不要）
+ */
+export async function saveMandalaReflection(
+  reflection: Omit<MandalaReflection, 'id' | 'created_at' | 'mindset_score' | 'mindset_feedback'>
+): Promise<MandalaReflection> {
+  if (!isSupabaseConfigured()) {
+    const newReflection: MandalaReflection = {
+      ...reflection,
+      id: `reflection-${Date.now()}`,
+      mindset_score: null,
+      mindset_feedback: null,
+      created_at: new Date().toISOString(),
+    }
+    demoReflections.push(newReflection)
+    return newReflection
+  }
+
+  const { data, error } = await getSupabase()
+    .from('mandala_reflections')
+    .insert(reflection)
+    .select()
+    .single()
+
+  if (error) {
+    console.error('[data] saveMandalaReflection() でエラーが発生しました:', error.message)
+    throw error
+  }
+  return data
+}
+
+// ============================================================
+// 目標更新フェーズ管理（コーチ主導トリガー）機能（今回追加）
+// ============================================================
+
+/**
+ * 現在アクティブな目標更新フェーズを取得する。
+ * 生徒側アプリでフェーズの有無を確認し、振り返りフローを起動するために使う。
+ */
+export async function getActiveGoalUpdatePhase(): Promise<GoalUpdatePhase | null> {
+  if (!isSupabaseConfigured()) {
+    return demoGoalUpdatePhases.find(p => p.is_active) || null
+  }
+  const { data, error } = await getSupabase()
+    .from('goal_update_phases')
+    .select('*')
+    .eq('is_active', true)
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error) {
+    console.error('[data] getActiveGoalUpdatePhase() でエラーが発生しました:', error.message)
+    return null
+  }
+  return data
+}
+
+/**
+ * 目標更新フェーズを開始する（コーチ専用）。
+ * @param termLabel  大会ターム名（例: "2026年 インターハイ予選"）
+ * @param coachId    開始したコーチのuser_id
+ */
+export async function startGoalUpdatePhase(
+  termLabel: string,
+  coachId: string,
+): Promise<GoalUpdatePhase> {
+  if (!isSupabaseConfigured()) {
+    // 既存のアクティブフェーズを終了する
+    demoGoalUpdatePhases.forEach(p => {
+      if (p.is_active) {
+        p.is_active = false
+        p.ended_at = new Date().toISOString()
+      }
+    })
+    const newPhase: GoalUpdatePhase = {
+      id: `phase-${Date.now()}`,
+      term_label: termLabel,
+      is_active: true,
+      started_by: coachId,
+      started_at: new Date().toISOString(),
+      ended_at: null,
+      created_at: new Date().toISOString(),
+    }
+    demoGoalUpdatePhases.push(newPhase)
+    return newPhase
+  }
+
+  const supabase = getSupabase()
+  const now = new Date().toISOString()
+
+  // 既存のアクティブフェーズをすべて終了する
+  await supabase
+    .from('goal_update_phases')
+    .update({ is_active: false, ended_at: now })
+    .eq('is_active', true)
+
+  // 新しいフェーズを開始する
+  const { data, error } = await supabase
+    .from('goal_update_phases')
+    .insert({
+      term_label: termLabel,
+      is_active: true,
+      started_by: coachId,
+      started_at: now,
+    })
+    .select()
+    .single()
+
+  if (error) {
+    console.error('[data] startGoalUpdatePhase() でエラーが発生しました:', error.message)
+    throw error
+  }
+  return data
+}
+
+/**
+ * 目標更新フェーズを終了する（コーチ専用）。
+ * @param phaseId 終了するフェーズのID
+ */
+export async function endGoalUpdatePhase(phaseId: string): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    const idx = demoGoalUpdatePhases.findIndex(p => p.id === phaseId)
+    if (idx >= 0) {
+      demoGoalUpdatePhases[idx].is_active = false
+      demoGoalUpdatePhases[idx].ended_at = new Date().toISOString()
+    }
+    return
+  }
+  const { error } = await getSupabase()
+    .from('goal_update_phases')
+    .update({ is_active: false, ended_at: new Date().toISOString() })
+    .eq('id', phaseId)
+  if (error) {
+    console.error('[data] endGoalUpdatePhase() でエラーが発生しました:', error.message)
+    throw error
+  }
 }
 
 // ---------- Daily Records ----------

@@ -24,6 +24,43 @@ export interface MandalaChart {
   actions: string[][]      // 8x8 = 64 actions
   target_date: string | null
   created_at: string
+  // ============================================================
+  // アーカイブ・大会周期機能（今回追加）
+  // ============================================================
+  term_label?: string | null        // 対象大会ターム（例: "2026年 インターハイ予選"）
+  status?: 'active' | 'archived'   // アクティブ or アーカイブ済み
+  archived_at?: string | null       // アーカイブした日時
+}
+
+// ============================================================
+// マンダラチャート振り返り（大会後リフレクション）
+// 新しいチャートを作成する直前に記録する前回大会の振り返りデータ
+// ============================================================
+export interface MandalaReflection {
+  id: string
+  user_id: string
+  mandala_chart_id: string          // 振り返り対象のチャートID
+  term_label: string                // 対象大会ターム（例: "2026年 インターハイ予選"）
+  achievement_note: string          // 達成度・成果のメモ
+  challenges: string                // 次期への課題
+  plan_b: string                    // 具体的なPlan B（改善行動戦略）
+  mindset_score?: number | null     // LLMによるメタ認知スコア（1〜4）
+  mindset_feedback?: string | null  // LLMのフィードバックテキスト
+  created_at: string
+}
+
+// ============================================================
+// 目標更新フェーズ管理
+// コーチが「次期目標設定フェーズ」を開始するためのフラグ
+// ============================================================
+export interface GoalUpdatePhase {
+  id: string
+  term_label: string         // 大会ターム名（例: "2026年 インターハイ予選"）
+  is_active: boolean         // フェーズが有効かどうか
+  started_by: string         // 開始したコーチのuser_id
+  started_at: string         // 開始日時
+  ended_at?: string | null   // 終了日時（フェーズ終了後に設定）
+  created_at: string
 }
 
 export interface DailyRecord {
