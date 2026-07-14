@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { User, DailyRecord, DailyRecordWithUser, Tournament, PhysicalRecord, MaxTrainingRecord, PracticeSession } from '@/types/database'
-import { getUsers, getAllDailyRecords, getActiveTournament, addComment, updateComment, getTeamConditionRecords, getAllPhysicalRecords, getAllMaxTrainingRecords, getPracticeSession, getPracticeSessions, upsertPracticeSession, getMindsetScores } from '@/lib/data'
+import { User, DailyRecord, DailyRecordWithUser, Tournament, PhysicalRecord, MaxTrainingRecord, PracticeSession, GoalUpdatePhase } from '@/types/database'
+import { getUsers, getAllDailyRecords, getActiveTournament, addComment, updateComment, getTeamConditionRecords, getAllPhysicalRecords, getAllMaxTrainingRecords, getPracticeSession, getPracticeSessions, upsertPracticeSession, getMindsetScores, getActiveGoalUpdatePhase, startGoalUpdatePhase, endGoalUpdatePhase } from '@/lib/data'
 import { getSession } from '@/lib/session'
 import Header from '@/components/Header'
 import BottomNav from '@/components/BottomNav'
@@ -90,6 +90,15 @@ export default function CoachDashboard() {
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<'condition' | 'timeline' | 'growth' | 'team' | 'karte' | 'rpe' | 'mindset'>('condition')
 
+  // ---- 目標更新フェーズ管理（コーチ主導・今回追加） ----
+  const [activePhase, setActivePhase] = useState<GoalUpdatePhase | null>(null)
+  // フェーズ開始モーダルの表示フラグ
+  const [showPhaseModal, setShowPhaseModal] = useState(false)
+  // 新フェーズのターム名入力
+  const [newTermLabel, setNewTermLabel] = useState('')
+  const [phaseStarting, setPhaseStarting] = useState(false)
+  const [phaseStartFeedback, setPhaseStartFeedback] = useState(false)
+
   // ---- メタ認知スコアタブ用 state ----
   // 全選手のスコア履歴（直近30日分）
   const [mindsetRecords, setMindsetRecords] = useState<import('@/types/database').DailyRecord[]>([])
@@ -148,16 +157,18 @@ export default function CoachDashboard() {
       // コンディション・Session RPEタブ用は過去14日間で取得
       const startDate = format(subDays(new Date(), 14), 'yyyy-MM-dd')
       // 成長・達成度タブ用は全期間（startDate未指定）で取得
-      const [users, records, allRecords, t] = await Promise.all([
+      const [users, records, allRecords, t, phase] = await Promise.all([
         getUsers(),
         getAllDailyRecords(startDate),
         getAllDailyRecords(),
         getActiveTournament(),
+        getActiveGoalUpdatePhase(),
       ])
       setAllUsers(users)
       setRecentRecords(records)
       setAllTimeRecords(allRecords)
       setTournament(t)
+      setActivePhase(phase)
       const todayStr = format(new Date(), 'yyyy-MM-dd')
       setTodayRecords(records.filter(r => r.record_date === todayStr))
 
@@ -168,6 +179,42 @@ export default function CoachDashboard() {
       console.error(e)
     } finally {
       setLoading(false)
+    }
+  }
+
+  /**
+   * 目標更新フェーズを開始するハンドラ（コーチ専用）
+   */
+  const handleStartGoalUpdatePhase = async () => {
+    if (!user || !newTermLabel.trim()) return
+    setPhaseStarting(true)
+    try {
+      const started = await startGoalUpdatePhase(newTermLabel.trim(), user.id)
+      setActivePhase(started)
+      setPhaseStartFeedback(true)
+      setShowPhaseModal(false)
+      setNewTermLabel('')
+      setTimeout(() => setPhaseStartFeedback(false), 3000)
+    } catch (e) {
+      console.error('[Coach] フェーズ開始エラー:', e)
+      alert('フェーズの開始に失敗しました。再度お試しください。')
+    } finally {
+      setPhaseStarting(false)
+    }
+  }
+
+  /**
+   * 目標更新フェーズを終了するハンドラ（コーチ専用）
+   */
+  const handleEndGoalUpdatePhase = async () => {
+    if (!activePhase) return
+    if (!confirm(`「${activePhase.term_label}」の目標更新フェーズを終了しますか？`)) return
+    try {
+      await endGoalUpdatePhase(activePhase.id)
+      setActivePhase(null)
+    } catch (e) {
+      console.error('[Coach] フェーズ終了エラー:', e)
+      alert('フェーズの終了に失敗しました。再度お試しください。')
     }
   }
 
@@ -494,6 +541,100 @@ export default function CoachDashboard() {
             />
           )}
         </div>
+
+        {/* ====== 目標更新フェーズ バナー（今回追加） ====== */}
+        {activePhase ? (
+          <div className="bg-orange-50 border-2 border-orange-300 rounded-2xl p-4 mb-4 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <div className="flex-1">
+                <p className="text-sm font-bold text-orange-700">🏆 目標更新フェーズ 実施中</p>
+                <p className="text-xs text-orange-600 mt-1">
+                  「{activePhase.term_label}」の振り返り・新目標設定フェーズが有効です。
+                  選手のアプリに通知バナーが表示されています。
+                </p>
+              </div>
+              <button
+                onClick={handleEndGoalUpdatePhase}
+                className="bg-gray-200 text-gray-700 font-medium px-4 py-2 rounded-xl hover:bg-gray-300 transition-colors text-xs whitespace-nowrap"
+              >
+                フェーズを終了する
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {phaseStartFeedback && (
+              <div className="bg-green-50 border-2 border-green-300 rounded-2xl p-3 mb-4 shadow-sm">
+                <p className="text-sm font-bold text-green-700">✅ 目標更新フェーズを開始しました！選手のアプリに通知されます。</p>
+              </div>
+            )}
+            <div className="bg-white rounded-2xl p-4 mb-4 shadow-sm flex flex-col sm:flex-row sm:items-center gap-3">
+              <div className="flex-1">
+                <p className="text-sm font-bold text-gray-700">🎯 次期目標設定フェーズ</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  ボタンを押すと全選手のアプリに振り返り・新目標設定の通知が届きます
+                </p>
+              </div>
+              <button
+                onClick={() => setShowPhaseModal(true)}
+                className="bg-brand-main text-brand-dark font-bold px-4 py-2 rounded-xl hover:bg-yellow-400 transition-colors text-sm whitespace-nowrap shadow-md"
+              >
+                🚀 次期目標設定フェーズを開始
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* ====== フェーズ開始モーダル ====== */}
+        {showPhaseModal && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-xl">
+              <h3 className="text-lg font-bold text-gray-800 mb-2">🏆 次期目標設定フェーズを開始</h3>
+              <p className="text-xs text-gray-500 mb-4">
+                大会ターム名を入力してください。選手のマンダラチャート画面に通知バナーが表示され、
+                振り返り入力 → 新チャート作成のフローが起動します。
+              </p>
+              <div className="mb-4">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  大会ターム名 <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={newTermLabel}
+                  onChange={(e) => setNewTermLabel(e.target.value)}
+                  placeholder="例: 2026年 インターハイ予選"
+                  className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-brand-main focus:outline-none text-sm"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) handleStartGoalUpdatePhase()
+                  }}
+                />
+              </div>
+              <p className="text-xs text-gray-400 mb-5 bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                ⚠️ フェーズを開始すると、全選手のマンダラチャート画面に振り返りを促す通知が表示されます。
+                既存のフェーズがある場合は自動的に終了されます。
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => { setShowPhaseModal(false); setNewTermLabel('') }}
+                  className="flex-1 py-2.5 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+                >
+                  キャンセル
+                </button>
+                <button
+                  onClick={handleStartGoalUpdatePhase}
+                  disabled={phaseStarting || !newTermLabel.trim()}
+                  className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${
+                    phaseStarting || !newTermLabel.trim()
+                      ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                      : 'bg-brand-main text-brand-dark hover:bg-yellow-400 shadow-md'
+                  }`}
+                >
+                  {phaseStarting ? '開始中...' : 'フェーズを開始する'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ====== タブ ====== */}
         <div className="flex gap-2 mb-4 overflow-x-auto">
