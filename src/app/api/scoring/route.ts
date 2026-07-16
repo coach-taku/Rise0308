@@ -125,7 +125,9 @@ export async function POST(request: NextRequest) {
       geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || ''
 
     // JSON を抽出してパースする（Gemini がマークダウンで囲む場合に対応）
-    const jsonMatch = rawText.match(/\{[\s\S]*\}/)
+    const マークダウン記法を先に除去する
+    const cleanedText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
+    const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       console.error('[scoring] Gemini のレスポンスから JSON を抽出できませんでした:', rawText)
       return NextResponse.json(
