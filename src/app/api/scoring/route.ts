@@ -11,7 +11,7 @@
  * - 振り返りテキストと仮 ID のみを送信する
  *
  * 【使用モデル】
- * - gemini-1.5-flash（コストパフォーマンス重視。AIの再学習に利用されないAPIエンドポイントを使用）
+ * - gemini-1.5-flash-latest（コストパフォーマンス重視。AIの再学習に利用されないAPIエンドポイントを使用）
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -93,8 +93,8 @@ export async function POST(request: NextRequest) {
     // （このAPIには氏名等は送信しない。振り返りテキストのみを送る）
     const anonymizedText = reflection.trim()
 
-    // Gemini API リクエスト
-    const geminiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`
+    // Gemini API リクエスト (URLモデル名を gemini-1.5-flash-latest に修正)
+    const geminiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`
     const prompt = `${RUBRIC}\n\n【採点対象の振り返りテキスト】\n${anonymizedText}`
 
     const geminiResponse = await fetch(geminiEndpoint, {
@@ -162,7 +162,7 @@ export async function POST(request: NextRequest) {
     // ============================================================
     if (isSupabaseConfigured()) {
       const { error: updateError } = await getSupabase()
-        .from('daily_records')
+        .from('mandala_reflections') // ← 保存先を正しいテーブルに修正
         .update({
           mindset_score: score,
           mindset_feedback: feedback,
