@@ -195,6 +195,104 @@ export interface GameStatPer40 {
   turnovers_per40: number | null
 }
 
+// ============================================================
+// 10ヶ条評価機能（2026-07-26 追加）
+// 自己評価・他者評価アンケートシステム
+// ============================================================
+
+/**
+ * 10ヶ条評価の質問定義（30問）。
+ * コードレベルで管理し、DBには保存しない。
+ */
+export interface EvaluationQuestion {
+  id: number           // 質問番号（1〜30）
+  category: string     // カテゴリ名（例: "チームへの貢献"）
+  text: string         // 質問テキスト
+}
+
+/**
+ * 評価タスク（アンケートのアサイン情報）。
+ * 指導者が配信ボタンを押した際に自動生成される。
+ */
+export interface EvaluationTask {
+  id: string
+  /** アンケート配信の識別ID（同一配信でグループ化） */
+  delivery_id: string
+  /** 評価を行う選手のuser_id */
+  evaluator_id: string
+  /** 評価される対象者のuser_id */
+  target_id: string
+  /** タスクのステータス */
+  status: 'pending' | 'completed'
+  /** 配信日 */
+  delivered_at: string
+  /** 回答完了日時 */
+  completed_at?: string | null
+  created_at: string
+}
+
+/**
+ * 評価回答データ（1問1レコード）。
+ * 自己評価・他者評価ともにこのテーブルに保存する。
+ */
+export interface EvaluationAnswer {
+  id: string
+  task_id: string       // evaluation_tasks.id への外部キー
+  evaluator_id: string  // 評価した選手のuser_id
+  target_id: string     // 評価された選手のuser_id
+  question_id: number   // 質問番号（1〜30）
+  score: number         // 評価スコア（1〜5）
+  created_at: string
+}
+
+/**
+ * アンケート配信（指導者が管理する配信単位）。
+ * 1回の配信ごとに1レコードを作成する。
+ */
+export interface EvaluationDelivery {
+  id: string
+  /** 配信名・期間ラベル（例: "2026年6月 前期"） */
+  label: string
+  /** 配信を作成したコーチのuser_id */
+  created_by: string
+  /** 配信日時 */
+  delivered_at: string
+  created_at: string
+}
+
+/**
+ * ペア設定（姉妹ペア・評価ペアのマスタデータ）。
+ * 評価タスク自動アサイン時に参照する。
+ */
+export interface EvaluationPair {
+  id: string
+  /** ペアの種別（例: "sister" / "position"） */
+  pair_type: string
+  player_a_id: string
+  player_b_id: string
+  created_at: string
+}
+
+/**
+ * Start/Stop/Continueアクションプラン。
+ * 10ヶ条評価の結果から導き出した行動目標。
+ * daily_records の目標候補・マンダラチャートのサジェストに連動する。
+ */
+export interface SscPlan {
+  id: string
+  user_id: string
+  /** 紐付く評価配信ID */
+  delivery_id: string
+  /** 新しく始めること */
+  start_action: string
+  /** やめること */
+  stop_action: string
+  /** 続けること */
+  continue_action: string
+  created_at: string
+  updated_at: string
+}
+
 /**
  * CSVインポート時の1行データ（バリデーション前の生データ）。
  * CSVの列名と対応する。

@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { User, DailyRecord, DailyRecordWithUser, Tournament, PhysicalRecord, MaxTrainingRecord, PracticeSession, GoalUpdatePhase } from '@/types/database'
-import { getUsers, getAllDailyRecords, getActiveTournament, addComment, updateComment, getTeamConditionRecords, getAllPhysicalRecords, getAllMaxTrainingRecords, getPracticeSession, getPracticeSessions, upsertPracticeSession, getMindsetScores, getActiveGoalUpdatePhase, startGoalUpdatePhase, endGoalUpdatePhase } from '@/lib/data'
+import { User, DailyRecord, DailyRecordWithUser, Tournament, PhysicalRecord, MaxTrainingRecord, PracticeSession, GoalUpdatePhase, EvaluationDelivery, EvaluationAnswer } from '@/types/database'
+import { getUsers, getAllDailyRecords, getActiveTournament, addComment, updateComment, getTeamConditionRecords, getAllPhysicalRecords, getAllMaxTrainingRecords, getPracticeSession, getPracticeSessions, upsertPracticeSession, getMindsetScores, getActiveGoalUpdatePhase, startGoalUpdatePhase, endGoalUpdatePhase, getEvaluationDeliveries, deliverEvaluationTasks, getAllEvaluationAnswers, getEvaluationPairs, addEvaluationPair, deleteEvaluationPair, EVALUATION_CATEGORIES, calcCategoryScores } from '@/lib/data'
 import { getSession } from '@/lib/session'
 import Header from '@/components/Header'
 import BottomNav from '@/components/BottomNav'
@@ -88,7 +88,7 @@ export default function CoachDashboard() {
   // 編集中テキスト（commentId → テキスト）
   const [editInputs, setEditInputs] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<'condition' | 'timeline' | 'growth' | 'team' | 'karte' | 'rpe' | 'mindset'>('condition')
+  const [activeTab, setActiveTab] = useState<'condition' | 'timeline' | 'growth' | 'team' | 'karte' | 'rpe' | 'mindset' | 'evaluation'>('condition')
 
   // ---- 目標更新フェーズ管理（コーチ主導・今回追加） ----
   const [activePhase, setActivePhase] = useState<GoalUpdatePhase | null>(null)
@@ -143,6 +143,20 @@ export default function CoachDashboard() {
   const [selectedPlayerIds, setSelectedPlayerIds] = useState<string[]>([])
   const [teamRecords, setTeamRecords] = useState<DailyRecord[]>([])
   const [teamLoading, setTeamLoading] = useState(false)
+
+  // ---- 10ヶ条評価タブ用 state ----
+  // 配信履歴
+  const [evaluationDeliveries, setEvaluationDeliveries] = useState<EvaluationDelivery[]>([])
+  // 選択中の配信
+  const [selectedDeliveryId, setSelectedDeliveryId] = useState<string | null>(null)
+  // 回答データ（選択配信の全回答）
+  const [evaluationAnswers, setEvaluationAnswers] = useState<EvaluationAnswer[]>([])
+  const [evaluationLoading, setEvaluationLoading] = useState(false)
+  // 配信モーダル
+  const [showDeliveryModal, setShowDeliveryModal] = useState(false)
+  const [deliveryLabel, setDeliveryLabel] = useState('')
+  const [delivering, setDelivering] = useState(false)
+  const [deliverFeedback, setDeliverFeedback] = useState(false)
 
   useEffect(() => {
     const session = getSession()
@@ -370,7 +384,66 @@ export default function CoachDashboard() {
     if (activeTab === 'mindset') {
       loadMindsetData()
     }
+    if (activeTab === 'evaluation') {
+      loadEvaluationData()
+    }
   }, [activeTab, loadMindsetData])
+
+  // ---- 10ヶ条評価タブのデータ取得 ----
+  const loadEvaluationData = async () => {
+    setEvaluationLoading(true)
+    try {
+      const deliveries = await getEvaluationDeliveries()
+      setEvaluationDeliveries(deliveries)
+      // 最新の配信を自動選択する
+      if (deliveries.length > 0 && !selectedDeliveryId) {
+        const latestId = deliveries[0].id
+        setSelectedDeliveryId(latestId)
+        const answers = await getAllEvaluationAnswers(latestId)
+        setEvaluationAnswers(answers)
+      }
+    } catch (e) {
+      console.error('[coach] 10ヶ条評価データ取得エラー:', e)
+    } finally {
+      setEvaluationLoading(false)
+    }
+  }
+
+  // ---- 配信IDが変わったときに回答を再取得する ----
+  useEffect(() => {
+    if (!selectedDeliveryId) return
+    const loadAnswers = async () => {
+      try {
+        const answers = await getAllEvaluationAnswers(selectedDeliveryId)
+        setEvaluationAnswers(answers)
+      } catch (e) {
+        console.error('[coach] 回答取得エラー:', e)
+      }
+    }
+    loadAnswers()
+  }, [selectedDeliveryId])
+
+  // ---- アンケート配信処理 ----
+  const handleDeliverEvaluation = async () => {
+    if (!user || !deliveryLabel.trim()) return
+    setDelivering(true)
+    try {
+      const players = allUsers.filter(u => u.role === 'player')
+      await deliverEvaluationTasks(deliveryLabel.trim(), user.id, players)
+      setDeliverFeedback(true)
+      setShowDeliveryModal(false)
+      setDeliveryLabel('')
+      // 配信一覧を再取得する
+      const deliveries = await getEvaluationDeliveries()
+      setEvaluationDeliveries(deliveries)
+      setTimeout(() => setDeliverFeedback(false), 3000)
+    } catch (e) {
+      console.error('[coach] 配信エラー:', e)
+      alert('配信に失敗しました。再度お試しください。')
+    } finally {
+      setDelivering(false)
+    }
+  }
 
   const handleDateChange = (date: string) => {
     setSelectedDate(date)
@@ -639,13 +712,14 @@ export default function CoachDashboard() {
         {/* ====== タブ ====== */}
         <div className="flex gap-2 mb-4 overflow-x-auto">
           {([
-            { key: 'condition', label: 'コンディション', icon: '❤️' },
-            { key: 'timeline',  label: 'タイムライン',   icon: '📝' },
-            { key: 'growth',    label: '成長・達成度',   icon: '📈' },
-            { key: 'team',      label: 'チーム推移',     icon: '📊' },
-            { key: 'karte',     label: 'カルテ',         icon: '📋' },
-            { key: 'rpe',       label: 'Session RPE',    icon: '🏋️' },
-            { key: 'mindset',   label: 'メタ認知',       icon: '🧠' },
+            { key: 'condition',  label: 'コンディション', icon: '❤️' },
+            { key: 'timeline',   label: 'タイムライン',   icon: '📝' },
+            { key: 'growth',     label: '成長・達成度',   icon: '📈' },
+            { key: 'team',       label: 'チーム推移',     icon: '📊' },
+            { key: 'karte',      label: 'カルテ',         icon: '📋' },
+            { key: 'rpe',        label: 'Session RPE',    icon: '🏋️' },
+            { key: 'mindset',    label: 'メタ認知',       icon: '🧠' },
+            { key: 'evaluation', label: '10ヶ条評価',     icon: '📊' },
           ] as const).map(tab => (
             <button
               key={tab.key}
@@ -1405,6 +1479,256 @@ export default function CoachDashboard() {
             onSelectPlayer={setSelectedMindsetPlayerId}
             getUserName={getUserName}
           />
+        )}
+
+        {/* ====== 10ヶ条評価タブ ====== */}
+        {activeTab === 'evaluation' && (
+          <div className="space-y-4">
+
+            {/* 配信完了フィードバック */}
+            {deliverFeedback && (
+              <div className="bg-green-50 border-2 border-green-300 rounded-2xl p-3 shadow-sm">
+                <p className="text-sm font-bold text-green-700">✅ アンケートを配信しました！選手のダッシュボードに通知が表示されます。</p>
+              </div>
+            )}
+
+            {/* 配信ボタン */}
+            <div className="bg-white rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-gray-700">📋 10ヶ条評価アンケート</h3>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  配信ボタンを押すと、ペア設定に基づき全選手にアンケートタスクが自動割り当てされます
+                </p>
+              </div>
+              <button
+                onClick={() => setShowDeliveryModal(true)}
+                className="bg-brand-main text-brand-dark font-bold px-5 py-2.5 rounded-xl hover:bg-yellow-400 transition-colors text-sm whitespace-nowrap shadow-md"
+              >
+                アンケートを配信する
+              </button>
+            </div>
+
+            {/* 配信履歴 */}
+            {evaluationDeliveries.length > 0 && (
+              <div className="bg-white rounded-2xl p-4 shadow-sm">
+                <h3 className="text-sm font-bold text-gray-700 mb-3">配信履歴</h3>
+                <div className="flex flex-wrap gap-2">
+                  {evaluationDeliveries.map((d: EvaluationDelivery) => (
+                    <button
+                      key={d.id}
+                      onClick={() => setSelectedDeliveryId(d.id)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                        selectedDeliveryId === d.id
+                          ? 'bg-brand-main text-brand-dark shadow-md'
+                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      }`}
+                    >
+                      {d.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 全選手スコア一覧 */}
+            {evaluationLoading ? (
+              <div className="text-center py-8 text-gray-400 text-sm">読み込み中...</div>
+            ) : evaluationAnswers.length === 0 ? (
+              <div className="bg-white rounded-2xl p-8 shadow-sm text-center">
+                <p className="text-4xl mb-3">📊</p>
+                <p className="text-gray-500 text-sm">
+                  {evaluationDeliveries.length === 0
+                    ? 'まだアンケートが配信されていません。「アンケートを配信する」から開始してください。'
+                    : 'この配信の回答データがまだありません。'}
+                </p>
+              </div>
+            ) : (
+              <>
+                {/* 選手別スコアカード */}
+                <div className="space-y-3">
+                  {allUsers
+                    .filter((u: User) => u.role === 'player')
+                    .map((player: User) => {
+                      const selfAnswerList = evaluationAnswers.filter(
+                        (a: EvaluationAnswer) => a.target_id === player.id && a.evaluator_id === player.id
+                      )
+                      const othersAnswerList = evaluationAnswers.filter(
+                        (a: EvaluationAnswer) => a.target_id === player.id && a.evaluator_id !== player.id
+                      )
+
+                      if (selfAnswerList.length === 0 && othersAnswerList.length === 0) return null
+
+                      const selfScores = calcCategoryScores(selfAnswerList, player.id)
+                      const othersScores = calcCategoryScores(othersAnswerList)
+
+                      const selfValues = Object.values(selfScores).filter((s: number) => s > 0)
+                      const othersValues = Object.values(othersScores).filter((s: number) => s > 0)
+
+                      const selfAvg = selfValues.length > 0
+                        ? Math.round(selfValues.reduce((a: number, b: number) => a + b, 0) / selfValues.length * 10) / 10
+                        : null
+                      const othersAvg = othersValues.length > 0
+                        ? Math.round(othersValues.reduce((a: number, b: number) => a + b, 0) / othersValues.length * 10) / 10
+                        : null
+
+                      const gap = selfAvg !== null && othersAvg !== null
+                        ? Math.abs(selfAvg - othersAvg)
+                        : null
+                      const isLargeGap = gap !== null && gap >= 1.0
+
+                      return (
+                        <div
+                          key={player.id}
+                          className={`bg-white rounded-2xl p-4 shadow-sm border-2 ${
+                            isLargeGap ? 'border-red-300' : 'border-transparent'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-bold text-gray-800 text-sm">{player.name}</span>
+                              {player.position && (
+                                <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
+                                  {player.position}
+                                </span>
+                              )}
+                              {isLargeGap && (
+                                <span className="text-xs bg-red-100 text-red-600 font-bold px-2 py-0.5 rounded-full">
+                                  ！ ギャップ大
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex gap-2 text-xs flex-shrink-0">
+                              {selfAvg !== null && (
+                                <span className="text-yellow-600 font-bold bg-yellow-50 px-2 py-0.5 rounded-full">
+                                  自己 {selfAvg}
+                                </span>
+                              )}
+                              {othersAvg !== null && (
+                                <span className="text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded-full">
+                                  他者 {othersAvg}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="space-y-1.5">
+                            {EVALUATION_CATEGORIES.map((cat: string) => {
+                              const self = selfScores[cat] || 0
+                              const other = othersScores[cat] || 0
+                              const catGap = self > 0 && other > 0 ? Math.abs(self - other) : null
+                              const isCatGap = catGap !== null && catGap >= 1.0
+                              return (
+                                <div key={cat}>
+                                  <div className="flex justify-between items-center mb-0.5">
+                                    <span className={`text-xs ${isCatGap ? 'font-bold text-red-600' : 'text-gray-500'}`}>
+                                      {isCatGap && '⚠ '}{cat}
+                                    </span>
+                                    <div className="flex gap-2 text-xs">
+                                      {self > 0 && <span className="text-yellow-600">{self}</span>}
+                                      {other > 0 && <span className="text-blue-500">{other}</span>}
+                                    </div>
+                                  </div>
+                                  <div className="flex gap-0.5 items-center">
+                                    <div className="flex-1 bg-gray-100 rounded-full h-1.5">
+                                      <div
+                                        className="bg-yellow-400 h-1.5 rounded-full"
+                                        style={{ width: `${(self / 5) * 100}%` }}
+                                      />
+                                    </div>
+                                    {other > 0 && (
+                                      <div className="flex-1 bg-gray-100 rounded-full h-1.5">
+                                        <div
+                                          className="bg-blue-400 h-1.5 rounded-full opacity-70"
+                                          style={{ width: `${(other / 5) * 100}%` }}
+                                        />
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+
+                          {isLargeGap && selfAvg !== null && othersAvg !== null && (
+                            <p className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-1.5 mt-2">
+                              {selfAvg > othersAvg
+                                ? `自己評価が他者評価より ${gap?.toFixed(1)} 高い（過大評価の可能性）`
+                                : `自己評価が他者評価より ${gap?.toFixed(1)} 低い（自信喪失の可能性）`}
+                            </p>
+                          )}
+                        </div>
+                      )
+                    })
+                    .filter(Boolean)
+                  }
+                </div>
+
+                {/* 凡例 */}
+                <div className="flex items-center gap-4 text-xs text-gray-400 justify-end">
+                  <span className="flex items-center gap-1">
+                    <span className="inline-block w-3 h-2 bg-yellow-400 rounded" /> 自己評価
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="inline-block w-3 h-2 bg-blue-400 rounded opacity-70" /> 他者評価
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="text-red-500">！</span> ギャップ1.0以上
+                  </span>
+                </div>
+              </>
+            )}
+
+            {/* 配信モーダル */}
+            {showDeliveryModal && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
+                <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl">
+                  <h3 className="text-lg font-bold text-brand-dark mb-2">📋 アンケートを配信する</h3>
+                  <p className="text-xs text-gray-500 mb-4">
+                    ペア設定に基づき、全選手に自己評価 + 他者評価タスクが自動割り当てされます。
+                  </p>
+                  <div className="mb-4">
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      配信名・期間ラベル <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={deliveryLabel}
+                      onChange={e => setDeliveryLabel(e.target.value)}
+                      placeholder="例: 2026年7月 前期評価"
+                      className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-brand-main focus:outline-none text-sm"
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && !e.shiftKey) handleDeliverEvaluation()
+                      }}
+                    />
+                  </div>
+                  <p className="text-xs text-gray-400 mb-5 bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                    ⚠️ 配信すると全選手のダッシュボードに通知が表示されます。
+                    ペア設定が未登録の場合、自己評価タスクのみ生成されます。
+                  </p>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => { setShowDeliveryModal(false); setDeliveryLabel('') }}
+                      className="flex-1 py-2.5 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+                    >
+                      キャンセル
+                    </button>
+                    <button
+                      onClick={handleDeliverEvaluation}
+                      disabled={delivering || !deliveryLabel.trim()}
+                      className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${
+                        delivering || !deliveryLabel.trim()
+                          ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                          : 'bg-brand-main text-brand-dark hover:bg-yellow-400 shadow-md'
+                      }`}
+                    >
+                      {delivering ? '配信中...' : '配信する'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+          </div>
         )}
 
       </main>
@@ -2331,6 +2655,7 @@ function MindsetScoreTab({
           </div>
         </div>
       )}
+
 
     </div>
   )
