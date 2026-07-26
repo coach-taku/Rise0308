@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { User, DailyRecord, DailyRecordWithUser, Tournament, PhysicalRecord, MaxTrainingRecord, PracticeSession, GoalUpdatePhase, EvaluationDelivery, EvaluationAnswer } from '@/types/database'
+import { User, DailyRecord, DailyRecordWithUser, Tournament, PhysicalRecord, MaxTrainingRecord, PracticeSession, GoalUpdatePhase, EvaluationDelivery, EvaluationAnswer, EvaluationPair } from '@/types/database'
 import { getUsers, getAllDailyRecords, getActiveTournament, addComment, updateComment, getTeamConditionRecords, getAllPhysicalRecords, getAllMaxTrainingRecords, getPracticeSession, getPracticeSessions, upsertPracticeSession, getMindsetScores, getActiveGoalUpdatePhase, startGoalUpdatePhase, endGoalUpdatePhase, getEvaluationDeliveries, deliverEvaluationTasks, getAllEvaluationAnswers, getEvaluationPairs, addEvaluationPair, deleteEvaluationPair, EVALUATION_CATEGORIES, calcCategoryScores } from '@/lib/data'
 import { getSession } from '@/lib/session'
 import Header from '@/components/Header'
@@ -157,6 +157,16 @@ export default function CoachDashboard() {
   const [deliveryLabel, setDeliveryLabel] = useState('')
   const [delivering, setDelivering] = useState(false)
   const [deliverFeedback, setDeliverFeedback] = useState(false)
+  // ペア設定
+  const [evaluationPairs, setEvaluationPairs] = useState<EvaluationPair[]>([])
+  const [pairsLoading, setPairsLoading] = useState(false)
+  const [showPairModal, setShowPairModal] = useState(false)
+  const [pairPlayerA, setPairPlayerA] = useState<string>('')
+  const [pairPlayerB, setPairPlayerB] = useState<string>('')
+  const [pairType, setPairType] = useState<string>('default')
+  const [pairSaving, setPairSaving] = useState(false)
+  const [pairFeedback, setPairFeedback] = useState<string | null>(null)
+  const [deletingPairId, setDeletingPairId] = useState<string | null>(null)
 
   useEffect(() => {
     const session = getSession()
@@ -393,8 +403,12 @@ export default function CoachDashboard() {
   const loadEvaluationData = async () => {
     setEvaluationLoading(true)
     try {
-      const deliveries = await getEvaluationDeliveries()
+      const [deliveries, pairs] = await Promise.all([
+        getEvaluationDeliveries(),
+        getEvaluationPairs(),
+      ])
       setEvaluationDeliveries(deliveries)
+      setEvaluationPairs(pairs)
       // 最新の配信を自動選択する
       if (deliveries.length > 0 && !selectedDeliveryId) {
         const latestId = deliveries[0].id
@@ -442,6 +456,67 @@ export default function CoachDashboard() {
       alert('配信に失敗しました。再度お試しください。')
     } finally {
       setDelivering(false)
+    }
+  }
+
+  // ---- ペア追加処理 ----
+  const handleAddPair = async () => {
+    if (!pairPlayerA || !pairPlayerB || pairPlayerA === pairPlayerB) return
+    // 重複チェック
+    const alreadyExists = evaluationPairs.some(
+      p =>
+        (p.player_a_id === pairPlayerA && p.player_b_id === pairPlayerB) ||
+        (p.player_a_id === pairPlayerB && p.player_b_id === pairPlayerA)
+    )
+    if (alreadyExists) {
+      setPairFeedback('error-dup')
+      setTimeout(() => setPairFeedback(null), 3000)
+      return
+    }
+    setPairSaving(true)
+    try {
+      const newPair = await addEvaluationPair(pairPlayerA, pairPlayerB, pairType || 'default')
+      setEvaluationPairs(prev => [...prev, newPair])
+      setPairPlayerA('')
+      setPairPlayerB('')
+      setPairType('default')
+      setShowPairModal(false)
+      setPairFeedback('success')
+      setTimeout(() => setPairFeedback(null), 3000)
+    } catch (e) {
+      console.error('[coach] ペア追加エラー:', e)
+      setPairFeedback('error')
+      setTimeout(() => setPairFeedback(null), 3000)
+    } finally {
+      setPairSaving(false)
+    }
+  }
+
+  // ---- ペア削除処理 ----
+  const handleDeletePair = async (pairId: string) => {
+    if (!confirm('このペア設定を削除しますか？')) return
+    setDeletingPairId(pairId)
+    try {
+      await deleteEvaluationPair(pairId)
+      setEvaluationPairs(prev => prev.filter(p => p.id !== pairId))
+    } catch (e) {
+      console.error('[coach] ペア削除エラー:', e)
+      alert('削除に失敗しました。再度お試しください。')
+    } finally {
+      setDeletingPairId(null)
+    }
+  }
+
+  // ---- ペア一覧再読み込み ----
+  const reloadPairs = async () => {
+    setPairsLoading(true)
+    try {
+      const pairs = await getEvaluationPairs()
+      setEvaluationPairs(pairs)
+    } catch (e) {
+      console.error('[coach] ペア取得エラー:', e)
+    } finally {
+      setPairsLoading(false)
     }
   }
 
@@ -1492,12 +1567,100 @@ export default function CoachDashboard() {
               </div>
             )}
 
+            {/* ペア設定セクション */}
+            <div className="bg-white rounded-2xl p-4 shadow-sm">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h3 className="text-sm font-bold text-gray-700">👥 他者評価ペア設定</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    ペアを登録すると、配信時に互いの他者評価タスクが自動生成されます
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={reloadPairs}
+                    disabled={pairsLoading}
+                    className="text-xs text-gray-400 hover:text-gray-600 transition-colors p-1.5 rounded-lg hover:bg-gray-100"
+                    title="再読み込み"
+                  >
+                    🔄
+                  </button>
+                  <button
+                    onClick={() => { setPairPlayerA(''); setPairPlayerB(''); setPairType('default'); setShowPairModal(true) }}
+                    className="bg-brand-main text-brand-dark font-bold px-4 py-2 rounded-xl hover:bg-yellow-400 transition-colors text-xs whitespace-nowrap shadow-md"
+                  >
+                    ＋ ペアを追加
+                  </button>
+                </div>
+              </div>
+
+              {/* ペア追加フィードバック */}
+              {pairFeedback === 'success' && (
+                <div className="mb-3 bg-green-50 border border-green-200 rounded-xl px-3 py-2 text-xs text-green-700 font-bold">
+                  ✅ ペアを追加しました
+                </div>
+              )}
+              {pairFeedback === 'error-dup' && (
+                <div className="mb-3 bg-orange-50 border border-orange-200 rounded-xl px-3 py-2 text-xs text-orange-700 font-bold">
+                  ⚠️ このペアはすでに登録されています
+                </div>
+              )}
+              {pairFeedback === 'error' && (
+                <div className="mb-3 bg-red-50 border border-red-200 rounded-xl px-3 py-2 text-xs text-red-700 font-bold">
+                  ❌ 追加に失敗しました。再度お試しください
+                </div>
+              )}
+
+              {/* ペア一覧 */}
+              {pairsLoading ? (
+                <div className="text-center py-4 text-gray-400 text-xs">読み込み中...</div>
+              ) : evaluationPairs.length === 0 ? (
+                <div className="text-center py-6 text-gray-400 text-xs bg-gray-50 rounded-xl">
+                  <p className="text-2xl mb-1">👫</p>
+                  <p>ペアが登録されていません</p>
+                  <p className="mt-0.5">「＋ ペアを追加」からペアを登録してください</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {evaluationPairs.map((pair: EvaluationPair) => {
+                    const playerA = allUsers.find(u => u.id === pair.player_a_id)
+                    const playerB = allUsers.find(u => u.id === pair.player_b_id)
+                    if (!playerA || !playerB) return null
+                    return (
+                      <div
+                        key={pair.id}
+                        className="flex items-center justify-between bg-gray-50 rounded-xl px-3 py-2.5"
+                      >
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          <span className="font-medium text-gray-800 text-sm truncate">{playerA.name}</span>
+                          <span className="text-gray-400 text-xs flex-shrink-0">⇄</span>
+                          <span className="font-medium text-gray-800 text-sm truncate">{playerB.name}</span>
+                          {pair.pair_type && pair.pair_type !== 'default' && (
+                            <span className="text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full flex-shrink-0">
+                              {pair.pair_type}
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => handleDeletePair(pair.id)}
+                          disabled={deletingPairId === pair.id}
+                          className="flex-shrink-0 ml-2 text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
+                        >
+                          {deletingPairId === pair.id ? '削除中...' : '削除'}
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
             {/* 配信ボタン */}
             <div className="bg-white rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h3 className="text-sm font-bold text-gray-700">📋 10ヶ条評価アンケート</h3>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  配信ボタンを押すと、ペア設定に基づき全選手にアンケートタスクが自動割り当てされます
+                  ペア設定に基づき全選手にアンケートタスクが自動割り当てされます
                 </p>
               </div>
               <button
@@ -1701,9 +1864,15 @@ export default function CoachDashboard() {
                       }}
                     />
                   </div>
+                  {/* ペア設定サマリー */}
+                  <div className="mb-4 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2.5 text-xs text-blue-700">
+                    👥 登録済みペア: <span className="font-bold">{evaluationPairs.length} 組</span>
+                    {evaluationPairs.length === 0 && (
+                      <span className="ml-1 text-orange-600">（ペア未登録のため自己評価タスクのみ生成されます）</span>
+                    )}
+                  </div>
                   <p className="text-xs text-gray-400 mb-5 bg-yellow-50 border border-yellow-200 rounded-lg p-3">
                     ⚠️ 配信すると全選手のダッシュボードに通知が表示されます。
-                    ペア設定が未登録の場合、自己評価タスクのみ生成されます。
                   </p>
                   <div className="flex gap-3">
                     <button
@@ -1722,6 +1891,116 @@ export default function CoachDashboard() {
                       }`}
                     >
                       {delivering ? '配信中...' : '配信する'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ペア追加モーダル */}
+            {showPairModal && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
+                <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl">
+                  <h3 className="text-lg font-bold text-brand-dark mb-1">👥 他者評価ペアを追加</h3>
+                  <p className="text-xs text-gray-500 mb-5">
+                    互いに他者評価し合う2人を選択してください。ペアは双方向に機能します。
+                  </p>
+
+                  {/* 選手A */}
+                  <div className="mb-4">
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      選手 A <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={pairPlayerA}
+                      onChange={e => setPairPlayerA(e.target.value)}
+                      className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-brand-main focus:outline-none text-sm bg-white"
+                    >
+                      <option value="">選択してください</option>
+                      {allUsers
+                        .filter(u => u.role === 'player')
+                        .map(u => (
+                          <option key={u.id} value={u.id} disabled={u.id === pairPlayerB}>
+                            {u.name}{u.position ? `（${u.position}）` : ''}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+
+                  {/* 選手B */}
+                  <div className="mb-4">
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      選手 B <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={pairPlayerB}
+                      onChange={e => setPairPlayerB(e.target.value)}
+                      className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-brand-main focus:outline-none text-sm bg-white"
+                    >
+                      <option value="">選択してください</option>
+                      {allUsers
+                        .filter(u => u.role === 'player')
+                        .map(u => (
+                          <option key={u.id} value={u.id} disabled={u.id === pairPlayerA}>
+                            {u.name}{u.position ? `（${u.position}）` : ''}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+
+                  {/* ペア種別（任意） */}
+                  <div className="mb-5">
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      ペア種別 <span className="text-gray-400 font-normal">（任意）</span>
+                    </label>
+                    <div className="flex gap-2">
+                      {['default', 'sister', 'position', 'captain'].map(type => (
+                        <button
+                          key={type}
+                          onClick={() => setPairType(type)}
+                          className={`flex-1 py-2 rounded-xl text-xs font-medium border-2 transition-all ${
+                            pairType === type
+                              ? 'border-brand-main bg-yellow-50 text-brand-dark'
+                              : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300'
+                          }`}
+                        >
+                          {type === 'default' ? '通常' : type === 'sister' ? 'シスター' : type === 'position' ? '同ポジ' : 'キャプテン'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* プレビュー */}
+                  {pairPlayerA && pairPlayerB && (
+                    <div className="mb-4 bg-gray-50 rounded-xl px-4 py-3 text-sm text-gray-600 text-center">
+                      <span className="font-bold text-gray-800">{allUsers.find(u => u.id === pairPlayerA)?.name}</span>
+                      <span className="mx-2 text-gray-400">⇄</span>
+                      <span className="font-bold text-gray-800">{allUsers.find(u => u.id === pairPlayerB)?.name}</span>
+                      {pairType !== 'default' && (
+                        <span className="ml-2 text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full">
+                          {pairType === 'sister' ? 'シスター' : pairType === 'position' ? '同ポジ' : 'キャプテン'}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => { setShowPairModal(false); setPairPlayerA(''); setPairPlayerB(''); setPairType('default') }}
+                      className="flex-1 py-2.5 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+                    >
+                      キャンセル
+                    </button>
+                    <button
+                      onClick={handleAddPair}
+                      disabled={pairSaving || !pairPlayerA || !pairPlayerB || pairPlayerA === pairPlayerB}
+                      className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${
+                        pairSaving || !pairPlayerA || !pairPlayerB || pairPlayerA === pairPlayerB
+                          ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                          : 'bg-brand-main text-brand-dark hover:bg-yellow-400 shadow-md'
+                      }`}
+                    >
+                      {pairSaving ? '追加中...' : '追加する'}
                     </button>
                   </div>
                 </div>
