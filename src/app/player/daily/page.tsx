@@ -2,8 +2,8 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { User, MandalaChart, DailyRecord } from '@/types/database'
-import { getMandalaChart, getDailyRecord, saveDailyRecord, getDailyRecords, calculateStreak } from '@/lib/data'
+import { User, MandalaChart, DailyRecord, SscPlan } from '@/types/database'
+import { getMandalaChart, getDailyRecord, saveDailyRecord, getDailyRecords, calculateStreak, getLatestSscPlan } from '@/lib/data'
 import { getSession } from '@/lib/session'
 import { calculatePoints, getPointMessage } from '@/lib/points'
 import Header from '@/components/Header'
@@ -51,15 +51,23 @@ export default function DailyInputPage() {
   const [streakDays, setStreakDays] = useState(0)
   // 今日が今回の保存で初めて完了したかどうか（初回保存 = 新規 ＝ ポジティブポップアップを強調）
   const [isNewRecord, setIsNewRecord] = useState(false)
+  // SSC（Start/Stop/Continue）アクションプラン（評価結果から連動）
+  const [sscPlan, setSscPlan] = useState<SscPlan | null>(null)
 
   useEffect(() => {
     const session = getSession()
     if (!session) { router.push('/login'); return }
     if (session.role === 'staff') { router.push('/coach/dashboard'); return }
     setUser(session)
-    getMandalaChart(session.id)
-      .then(chart => { setMandala(chart) })
-      .catch(e => { console.error('[daily] マンダラチャートの取得に失敗しました:', e) })
+    Promise.all([
+      getMandalaChart(session.id),
+      getLatestSscPlan(session.id),
+    ])
+      .then(([chart, ssc]) => {
+        setMandala(chart)
+        setSscPlan(ssc)
+      })
+      .catch(e => { console.error('[daily] 初期データ取得に失敗しました:', e) })
       .finally(() => { setLoading(false) })
   }, [router])
 
@@ -86,9 +94,21 @@ export default function DailyInputPage() {
       .catch(e => { console.error('[daily] 日次記録の取得に失敗しました:', e) })
   }, [user, recordDate])
 
-  const allGoals: string[] = mandala
-    ? [...mandala.elements.filter(e => e.trim()), ...mandala.actions.flat().filter(g => g.trim())]
-    : []
+  // SSCアクションプランから目標候補を生成する（空でないものだけ追加）
+  const sscGoals: string[] = sscPlan ? [
+    sscPlan.start_action && `🚀 ${sscPlan.start_action}`,
+    sscPlan.stop_action && `🛑 ${sscPlan.stop_action}`,
+    sscPlan.continue_action && `🔄 ${sscPlan.continue_action}`,
+  ].filter(Boolean) as string[] : []
+
+  const allGoals: string[] = [
+    // SSCプランを先頭に追加する（目立たせるため）
+    ...sscGoals,
+    // マンダラチャートの要素・行動
+    ...(mandala
+      ? [...mandala.elements.filter(e => e.trim()), ...mandala.actions.flat().filter(g => g.trim())]
+      : []),
+  ]
 
   const toggleGoal = (goal: string) => {
     if (targetItems.includes(goal)) setTargetItems(targetItems.filter(g => g !== goal))
@@ -275,6 +295,11 @@ export default function DailyInputPage() {
           <h3 className="text-sm font-bold text-gray-700 flex items-center gap-2">
             <span className="bg-brand-main w-1.5 h-5 rounded-full" />今日の目標（最大3つ選択）
           </h3>
+          {sscGoals.length > 0 && (
+            <p className="text-xs text-orange-600 bg-orange-50 px-3 py-1.5 rounded-lg">
+              🎯 10ヶ条評価のアクションプランが候補に追加されています
+            </p>
+          )}
           {allGoals.length > 0 ? (
             <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto">
               {allGoals.map((goal, idx) => (

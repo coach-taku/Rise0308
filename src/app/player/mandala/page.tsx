@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { User, MandalaChart, MandalaReflection, GoalUpdatePhase } from '@/types/database'
+import { User, MandalaChart, MandalaReflection, GoalUpdatePhase, SscPlan } from '@/types/database'
 import {
   getMandalaChart,
   saveMandalaChart,
@@ -11,6 +11,7 @@ import {
   getMandalaReflections,
   saveMandalaReflection,
   getActiveGoalUpdatePhase,
+  getLatestSscPlan,
 } from '@/lib/data'
 import { getSession } from '@/lib/session'
 import Header from '@/components/Header'
@@ -57,6 +58,9 @@ export default function MandalaPage() {
   const [activePhase, setActivePhase] = useState<GoalUpdatePhase | null>(null)
   const [phaseChecked, setPhaseChecked] = useState(false)
 
+  // ---- SSCアクションプラン（10ヶ条評価から連動するサジェスト） ----
+  const [sscPlan, setSscPlan] = useState<SscPlan | null>(null)
+
   // ---- 振り返り入力 ----
   const [reflectionTermLabel, setReflectionTermLabel] = useState('')
   const [reflectionAchievement, setReflectionAchievement] = useState('')
@@ -83,11 +87,12 @@ export default function MandalaPage() {
 
   const loadAll = async (userId: string) => {
     try {
-      const [chart, archiveList, reflectionList, phase] = await Promise.all([
+      const [chart, archiveList, reflectionList, phase, ssc] = await Promise.all([
         getMandalaChart(userId),
         getArchivedMandalaCharts(userId),
         getMandalaReflections(userId),
         getActiveGoalUpdatePhase(),
+        getLatestSscPlan(userId),
       ])
       if (chart) {
         setActiveChart(chart)
@@ -98,6 +103,7 @@ export default function MandalaPage() {
       setArchives(archiveList)
       setReflections(reflectionList)
       setActivePhase(phase)
+      setSscPlan(ssc)
     } catch (e) {
       console.error('[mandala] データ取得に失敗しました:', e)
     } finally {
@@ -258,6 +264,38 @@ export default function MandalaPage() {
             📚 成長の軌跡 ({archives.length})
           </button>
         </div>
+
+        {/* ====== SSCアクションプラン サジェストバナー ====== */}
+        {sscPlan && mode === 'main' && (
+          <div className="bg-gradient-to-r from-orange-50 to-yellow-50 border border-orange-200 rounded-2xl p-4 mb-4 shadow-sm">
+            <p className="text-xs font-bold text-orange-700 mb-2">
+              🎯 10ヶ条評価のアクションプランが届いています
+            </p>
+            <div className="space-y-1.5">
+              {sscPlan.start_action && (
+                <p className="text-xs text-gray-700 bg-green-50 px-3 py-1.5 rounded-lg flex items-start gap-2">
+                  <span className="font-bold text-green-600 shrink-0">🚀 Start:</span>
+                  <span>{sscPlan.start_action}</span>
+                </p>
+              )}
+              {sscPlan.stop_action && (
+                <p className="text-xs text-gray-700 bg-red-50 px-3 py-1.5 rounded-lg flex items-start gap-2">
+                  <span className="font-bold text-red-600 shrink-0">🛑 Stop:</span>
+                  <span>{sscPlan.stop_action}</span>
+                </p>
+              )}
+              {sscPlan.continue_action && (
+                <p className="text-xs text-gray-700 bg-blue-50 px-3 py-1.5 rounded-lg flex items-start gap-2">
+                  <span className="font-bold text-blue-600 shrink-0">🔄 Continue:</span>
+                  <span>{sscPlan.continue_action}</span>
+                </p>
+              )}
+            </div>
+            <p className="text-xs text-orange-600 mt-2">
+              💡 空欄のマスに上記のアクションプランをコピーして活用しましょう
+            </p>
+          </div>
+        )}
 
         {/* ====== アクティブフェーズ通知バナー ====== */}
         {activePhase && mode === 'main' && (
