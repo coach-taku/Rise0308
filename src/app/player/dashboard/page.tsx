@@ -2,8 +2,8 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { User, Tournament, DailyRecord } from '@/types/database'
-import { getActiveTournament, getDailyRecords, calculateStreak } from '@/lib/data'
+import { User, Tournament, DailyRecord, EvaluationTask } from '@/types/database'
+import { getActiveTournament, getDailyRecords, calculateStreak, getPendingEvaluationTasks } from '@/lib/data'
 import { getSession } from '@/lib/session'
 import Header from '@/components/Header'
 import BottomNav from '@/components/BottomNav'
@@ -19,6 +19,8 @@ export default function PlayerDashboard() {
   const [allRecords, setAllRecords] = useState<DailyRecord[]>([])
   // 直近30日のレコード（週間サマリー・グラフに使用）
   const [recentRecords, setRecentRecords] = useState<DailyRecord[]>([])
+  // 未完了の10ヶ条評価タスク（通知バナー表示用）
+  const [pendingEvalTasks, setPendingEvalTasks] = useState<EvaluationTask[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -31,16 +33,19 @@ export default function PlayerDashboard() {
     const loadData = async () => {
       try {
         // 全件と直近30日を並列で取得する
-        const [t, allR, recentR] = await Promise.all([
+        const [t, allR, recentR, evalTasks] = await Promise.all([
           getActiveTournament(),
           // startDate未指定で全期間のデータを取得（累計記録数・ストリーク計算用）
           getDailyRecords(userData.id),
           // 直近30日（週間サマリー・グラフ用）
           getDailyRecords(userData.id, format(subDays(new Date(), 30), 'yyyy-MM-dd')),
+          // 未完了の10ヶ条評価タスク（通知バナー用）
+          getPendingEvaluationTasks(userData.id),
         ])
         setTournament(t)
         setAllRecords(allR)
         setRecentRecords(recentR)
+        setPendingEvalTasks(evalTasks)
       } catch (e) { console.error(e) }
       finally { setLoading(false) }
     }
@@ -92,6 +97,25 @@ export default function PlayerDashboard() {
     <div className="min-h-screen bg-brand-bg pb-20 md:pb-8">
       <Header userName={user.name} role="player" />
       <main className="max-w-2xl mx-auto px-4 py-4 space-y-4">
+        {/* 10ヶ条評価タスク通知バナー */}
+        {pendingEvalTasks.length > 0 && (
+          <div
+            className="bg-gradient-to-r from-orange-500 to-yellow-400 rounded-2xl p-4 shadow-md flex items-center justify-between cursor-pointer hover:opacity-90 transition-opacity"
+            onClick={() => router.push('/player/evaluation')}
+          >
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">📋</span>
+              <div>
+                <p className="text-white font-bold text-sm">今月の10ヶ条評価が届いています！</p>
+                <p className="text-white/80 text-xs mt-0.5">
+                  未回答 {pendingEvalTasks.length} 件 — タップして回答する
+                </p>
+              </div>
+            </div>
+            <span className="text-white text-lg">→</span>
+          </div>
+        )}
+
         {/* Welcome */}
         <div className="bg-gradient-to-r from-brand-dark to-gray-700 rounded-2xl p-5 text-white">
           <p className="text-sm text-gray-300">おかえりなさい</p>

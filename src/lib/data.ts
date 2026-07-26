@@ -1,4 +1,4 @@
-import { User, Tournament, MandalaChart, MandalaReflection, GoalUpdatePhase, DailyRecord, DailyRecordWithUser, Comment, PhysicalRecord, MaxTrainingRecord, PracticeSession, GameStat, CsvStatRow } from '@/types/database'
+import { User, Tournament, MandalaChart, MandalaReflection, GoalUpdatePhase, DailyRecord, DailyRecordWithUser, Comment, PhysicalRecord, MaxTrainingRecord, PracticeSession, GameStat, CsvStatRow, EvaluationQuestion, EvaluationTask, EvaluationAnswer, EvaluationDelivery, EvaluationPair, SscPlan } from '@/types/database'
 import { getSupabase, isSupabaseConfigured } from './supabase'
 
 // ============================================================
@@ -1688,5 +1688,583 @@ export function calcPer40(stat: GameStat) {
 export function calcPct(made: number, attempted: number): number | null {
   if (!attempted) return null
   return Math.round((made / attempted) * 1000) / 10
+}
+
+// ============================================================
+// 10ヶ条評価機能（2026-07-26 追加）
+// 自己評価・他者評価アンケートシステム
+// ============================================================
+
+/**
+ * 10ヶ条の質問定義（全30問・カテゴリ3問ずつ）。
+ * コードレベルで管理する（DBには保存しない）。
+ */
+export const EVALUATION_QUESTIONS: EvaluationQuestion[] = [
+  // ① 礼儀・挨拶
+  { id: 1, category: '礼儀・挨拶', text: '練習前後に大きな声で挨拶ができている' },
+  { id: 2, category: '礼儀・挨拶', text: '指導者や先輩への言葉遣いが丁寧である' },
+  { id: 3, category: '礼儀・挨拶', text: '感謝の気持ちを言葉や行動で表せている' },
+  // ② 時間管理
+  { id: 4, category: '時間管理', text: '練習や集合の時間を守っている' },
+  { id: 5, category: '時間管理', text: '準備・片付けを素早く行っている' },
+  { id: 6, category: '時間管理', text: '学業と部活のバランスを管理できている' },
+  // ③ 集中力・主体性
+  { id: 7, category: '集中力・主体性', text: '練習中に自分から考えて動いている' },
+  { id: 8, category: '集中力・主体性', text: '指示がなくても次の行動ができている' },
+  { id: 9, category: '集中力・主体性', text: 'ダラダラせず常に集中して取り組んでいる' },
+  // ④ コミュニケーション
+  { id: 10, category: 'コミュニケーション', text: '練習中に声を出してチームを盛り上げている' },
+  { id: 11, category: 'コミュニケーション', text: '仲間のミスを責めずフォローできている' },
+  { id: 12, category: 'コミュニケーション', text: '困っている仲間に積極的に声をかけられる' },
+  // ⑤ 向上心・努力
+  { id: 13, category: '向上心・努力', text: '苦手な部分に積極的に取り組んでいる' },
+  { id: 14, category: '向上心・努力', text: '練習後も自主練や勉強など努力を続けている' },
+  { id: 15, category: '向上心・努力', text: '目標に向かって毎日行動できている' },
+  // ⑥ 責任感
+  { id: 16, category: '責任感', text: '自分の役割を最後まで責任を持って果たしている' },
+  { id: 17, category: '責任感', text: 'ミスや失敗を言い訳せず受け入れられる' },
+  { id: 18, category: '責任感', text: 'チームのルールを守り模範を示している' },
+  // ⑦ チームワーク
+  { id: 19, category: 'チームワーク', text: 'チームの目標を自分のこととして考えている' },
+  { id: 20, category: 'チームワーク', text: '自分の出場機会が少なくてもチームを支えられる' },
+  { id: 21, category: 'チームワーク', text: '仲間の成長を素直に喜べている' },
+  // ⑧ 体調管理
+  { id: 22, category: '体調管理', text: '十分な睡眠と食事でコンディションを整えている' },
+  { id: 23, category: '体調管理', text: 'ケガ予防のためのケアや準備運動を徹底している' },
+  { id: 24, category: '体調管理', text: '体調不良のときに適切に報告・休息できている' },
+  // ⑨ メンタル・切り替え
+  { id: 25, category: 'メンタル・切り替え', text: '失敗してもすぐに気持ちを切り替えられる' },
+  { id: 26, category: 'メンタル・切り替え', text: 'プレッシャーのある場面でも前向きに取り組める' },
+  { id: 27, category: 'メンタル・切り替え', text: '不調な時期でも諦めずに取り組み続けられる' },
+  // ⑩ 成長マインドセット
+  { id: 28, category: '成長マインドセット', text: 'アドバイスや指摘を素直に受け入れ実行している' },
+  { id: 29, category: '成長マインドセット', text: '「できない」ではなく「どうすればできるか」を考えている' },
+  { id: 30, category: '成長マインドセット', text: '毎日の振り返りを通じて自分の成長を実感できている' },
+]
+
+/** カテゴリ一覧（レーダーチャートの軸として使用） */
+export const EVALUATION_CATEGORIES = [
+  '礼儀・挨拶', '時間管理', '集中力・主体性', 'コミュニケーション', '向上心・努力',
+  '責任感', 'チームワーク', '体調管理', 'メンタル・切り替え', '成長マインドセット',
+]
+
+// ---- デモ用インメモリデータ ----
+
+let demoEvaluationDeliveries: EvaluationDelivery[] = []
+let demoEvaluationTasks: EvaluationTask[] = []
+let demoEvaluationAnswers: EvaluationAnswer[] = []
+let demoEvaluationPairs: EvaluationPair[] = [
+  // デモ用ペア（姉妹ペア）
+  { id: 'pair-1', pair_type: 'sister', player_a_id: 'player-1', player_b_id: 'player-2', created_at: '2026-01-01T00:00:00Z' },
+  { id: 'pair-2', pair_type: 'sister', player_a_id: 'player-3', player_b_id: 'player-4', created_at: '2026-01-01T00:00:00Z' },
+]
+let demoSscPlans: SscPlan[] = []
+
+// ---- アンケート配信管理（コーチ専用） ----
+
+/**
+ * 過去の配信一覧を取得する（コーチ専用）。
+ */
+export async function getEvaluationDeliveries(): Promise<EvaluationDelivery[]> {
+  if (!isSupabaseConfigured()) {
+    return [...demoEvaluationDeliveries].sort(
+      (a, b) => b.delivered_at.localeCompare(a.delivered_at)
+    )
+  }
+  const { data, error } = await getSupabase()
+    .from('evaluation_deliveries')
+    .select('*')
+    .order('delivered_at', { ascending: false })
+  if (error) {
+    console.error('[data] getEvaluationDeliveries() でエラーが発生しました:', error.message)
+    return []
+  }
+  return data || []
+}
+
+/**
+ * アンケートを配信する（コーチ専用）。
+ * ペア設定テーブルを参照し、各選手の評価タスクを一括生成する。
+ * @param label      配信名・期間ラベル（例: "2026年7月 前期"）
+ * @param coachId    配信したコーチのuser_id
+ * @param players    評価対象の全選手
+ */
+export async function deliverEvaluationTasks(
+  label: string,
+  coachId: string,
+  players: User[],
+): Promise<EvaluationDelivery> {
+  const now = new Date().toISOString()
+  const deliveryId = `delivery-${Date.now()}`
+
+  if (!isSupabaseConfigured()) {
+    // 新しい配信レコードを作成する
+    const delivery: EvaluationDelivery = {
+      id: deliveryId,
+      label,
+      created_by: coachId,
+      delivered_at: now,
+      created_at: now,
+    }
+    demoEvaluationDeliveries.push(delivery)
+
+    // 各選手に自己評価タスクを生成する
+    const playerIds = players.map(p => p.id)
+    for (const player of players) {
+      // 自己評価タスク
+      demoEvaluationTasks.push({
+        id: `task-self-${deliveryId}-${player.id}`,
+        delivery_id: deliveryId,
+        evaluator_id: player.id,
+        target_id: player.id,
+        status: 'pending',
+        delivered_at: now,
+        completed_at: null,
+        created_at: now,
+      })
+      // ペア設定に基づく他者評価タスクを生成する
+      const pairs = demoEvaluationPairs.filter(
+        p => p.player_a_id === player.id || p.player_b_id === player.id
+      )
+      for (const pair of pairs) {
+        const targetId = pair.player_a_id === player.id ? pair.player_b_id : pair.player_a_id
+        if (!playerIds.includes(targetId)) continue
+        // 重複チェック
+        const exists = demoEvaluationTasks.some(
+          t => t.delivery_id === deliveryId && t.evaluator_id === player.id && t.target_id === targetId
+        )
+        if (!exists) {
+          demoEvaluationTasks.push({
+            id: `task-peer-${deliveryId}-${player.id}-${targetId}`,
+            delivery_id: deliveryId,
+            evaluator_id: player.id,
+            target_id: targetId,
+            status: 'pending',
+            delivered_at: now,
+            completed_at: null,
+            created_at: now,
+          })
+        }
+      }
+    }
+    return delivery
+  }
+
+  // Supabase: トランザクション的に処理する（エラー時はrollbackなし・シンプル実装）
+  const supabase = getSupabase()
+
+  // 1. 配信レコードを作成する
+  const { data: delivery, error: dErr } = await supabase
+    .from('evaluation_deliveries')
+    .insert({ id: deliveryId, label, created_by: coachId, delivered_at: now })
+    .select()
+    .single()
+  if (dErr) {
+    console.error('[data] deliverEvaluationTasks() 配信作成エラー:', dErr.message)
+    throw dErr
+  }
+
+  // 2. ペア設定を取得する
+  const { data: pairs } = await supabase.from('evaluation_pairs').select('*')
+  const pairList: EvaluationPair[] = pairs || []
+
+  // 3. タスクを生成する
+  const tasks: Omit<EvaluationTask, 'id'>[] = []
+  const playerIds = players.map(p => p.id)
+  for (const player of players) {
+    // 自己評価
+    tasks.push({
+      delivery_id: deliveryId,
+      evaluator_id: player.id,
+      target_id: player.id,
+      status: 'pending',
+      delivered_at: now,
+      completed_at: null,
+      created_at: now,
+    })
+    // ペア他者評価
+    const myPairs = pairList.filter(
+      p => p.player_a_id === player.id || p.player_b_id === player.id
+    )
+    for (const pair of myPairs) {
+      const targetId = pair.player_a_id === player.id ? pair.player_b_id : pair.player_a_id
+      if (!playerIds.includes(targetId)) continue
+      tasks.push({
+        delivery_id: deliveryId,
+        evaluator_id: player.id,
+        target_id: targetId,
+        status: 'pending',
+        delivered_at: now,
+        completed_at: null,
+        created_at: now,
+      })
+    }
+  }
+  if (tasks.length > 0) {
+    await supabase.from('evaluation_tasks').insert(tasks)
+  }
+  return delivery
+}
+
+// ---- タスク取得（選手側） ----
+
+/**
+ * 指定選手の未完了評価タスクを取得する。
+ * ダッシュボードの通知バナー表示やアンケート画面で使用する。
+ * @param evaluatorId  評価を行う選手のuser_id
+ */
+export async function getPendingEvaluationTasks(
+  evaluatorId: string
+): Promise<EvaluationTask[]> {
+  if (!isSupabaseConfigured()) {
+    return demoEvaluationTasks
+      .filter(t => t.evaluator_id === evaluatorId && t.status === 'pending')
+  }
+  const { data, error } = await getSupabase()
+    .from('evaluation_tasks')
+    .select('*')
+    .eq('evaluator_id', evaluatorId)
+    .eq('status', 'pending')
+    .order('delivered_at', { ascending: false })
+  if (error) {
+    console.error('[data] getPendingEvaluationTasks() でエラーが発生しました:', error.message)
+    return []
+  }
+  return data || []
+}
+
+/**
+ * 指定配信IDの全タスクを取得する（コーチ向け）。
+ */
+export async function getEvaluationTasksByDelivery(
+  deliveryId: string
+): Promise<EvaluationTask[]> {
+  if (!isSupabaseConfigured()) {
+    return demoEvaluationTasks.filter(t => t.delivery_id === deliveryId)
+  }
+  const { data, error } = await getSupabase()
+    .from('evaluation_tasks')
+    .select('*')
+    .eq('delivery_id', deliveryId)
+  if (error) {
+    console.error('[data] getEvaluationTasksByDelivery() でエラーが発生しました:', error.message)
+    return []
+  }
+  return data || []
+}
+
+// ---- 回答の保存・取得 ----
+
+/**
+ * 1つの評価タスクの回答を一括保存する。
+ * 保存後、タスクのステータスを completed に更新する。
+ * @param taskId      評価タスクID
+ * @param evaluatorId 評価者ID
+ * @param targetId    被評価者ID
+ * @param answers     質問番号→スコアのマップ
+ */
+export async function submitEvaluationAnswers(
+  taskId: string,
+  evaluatorId: string,
+  targetId: string,
+  answers: Record<number, number>
+): Promise<void> {
+  const now = new Date().toISOString()
+
+  if (!isSupabaseConfigured()) {
+    // 回答をインメモリに保存する
+    for (const [qIdStr, score] of Object.entries(answers)) {
+      const qId = parseInt(qIdStr)
+      // 既存回答を更新 or 新規追加
+      const existIdx = demoEvaluationAnswers.findIndex(
+        a => a.task_id === taskId && a.question_id === qId
+      )
+      const ans: EvaluationAnswer = {
+        id: `ans-${taskId}-${qId}`,
+        task_id: taskId,
+        evaluator_id: evaluatorId,
+        target_id: targetId,
+        question_id: qId,
+        score,
+        created_at: now,
+      }
+      if (existIdx >= 0) {
+        demoEvaluationAnswers[existIdx] = ans
+      } else {
+        demoEvaluationAnswers.push(ans)
+      }
+    }
+    // タスクのステータスを completed に更新する
+    const taskIdx = demoEvaluationTasks.findIndex(t => t.id === taskId)
+    if (taskIdx >= 0) {
+      demoEvaluationTasks[taskIdx].status = 'completed'
+      demoEvaluationTasks[taskIdx].completed_at = now
+    }
+    return
+  }
+
+  const supabase = getSupabase()
+  // 回答を一括insert（既存レコードがあればupsert）
+  const rows = Object.entries(answers).map(([qIdStr, score]) => ({
+    task_id: taskId,
+    evaluator_id: evaluatorId,
+    target_id: targetId,
+    question_id: parseInt(qIdStr),
+    score,
+    created_at: now,
+  }))
+  const { error: ansErr } = await supabase
+    .from('evaluation_answers')
+    .upsert(rows, { onConflict: 'task_id,question_id' })
+  if (ansErr) {
+    console.error('[data] submitEvaluationAnswers() 回答保存エラー:', ansErr.message)
+    throw ansErr
+  }
+  // タスクのステータスを更新する
+  const { error: taskErr } = await supabase
+    .from('evaluation_tasks')
+    .update({ status: 'completed', completed_at: now })
+    .eq('id', taskId)
+  if (taskErr) {
+    console.error('[data] submitEvaluationAnswers() タスク更新エラー:', taskErr.message)
+    throw taskErr
+  }
+}
+
+/**
+ * 指定選手に対する全評価回答を取得する（自己評価 + 他者評価）。
+ * レーダーチャート表示に使用する。
+ * @param targetId   被評価者（評価される側）のuser_id
+ * @param deliveryId 絞り込む配信ID（省略で全件）
+ */
+export async function getEvaluationAnswersForTarget(
+  targetId: string,
+  deliveryId?: string
+): Promise<EvaluationAnswer[]> {
+  if (!isSupabaseConfigured()) {
+    let answers = demoEvaluationAnswers.filter(a => a.target_id === targetId)
+    if (deliveryId) {
+      const taskIds = demoEvaluationTasks
+        .filter(t => t.delivery_id === deliveryId)
+        .map(t => t.id)
+      answers = answers.filter(a => taskIds.includes(a.task_id))
+    }
+    return answers
+  }
+  let query = getSupabase()
+    .from('evaluation_answers')
+    .select('*')
+    .eq('target_id', targetId)
+  if (deliveryId) {
+    // delivery_id は evaluation_tasks 経由で絞り込む
+    const { data: tasks } = await getSupabase()
+      .from('evaluation_tasks')
+      .select('id')
+      .eq('delivery_id', deliveryId)
+    const taskIds = (tasks || []).map((t: { id: string }) => t.id)
+    if (taskIds.length === 0) return []
+    query = query.in('task_id', taskIds)
+  }
+  const { data, error } = await query
+  if (error) {
+    console.error('[data] getEvaluationAnswersForTarget() でエラーが発生しました:', error.message)
+    return []
+  }
+  return data || []
+}
+
+/**
+ * 全選手の評価回答を一括取得する（コーチ向け一覧表示用）。
+ * @param deliveryId 絞り込む配信ID
+ */
+export async function getAllEvaluationAnswers(
+  deliveryId: string
+): Promise<EvaluationAnswer[]> {
+  if (!isSupabaseConfigured()) {
+    const taskIds = demoEvaluationTasks
+      .filter(t => t.delivery_id === deliveryId)
+      .map(t => t.id)
+    return demoEvaluationAnswers.filter(a => taskIds.includes(a.task_id))
+  }
+  const { data: tasks } = await getSupabase()
+    .from('evaluation_tasks')
+    .select('id')
+    .eq('delivery_id', deliveryId)
+  const taskIds = (tasks || []).map((t: { id: string }) => t.id)
+  if (taskIds.length === 0) return []
+  const { data, error } = await getSupabase()
+    .from('evaluation_answers')
+    .select('*')
+    .in('task_id', taskIds)
+  if (error) {
+    console.error('[data] getAllEvaluationAnswers() でエラーが発生しました:', error.message)
+    return []
+  }
+  return data || []
+}
+
+// ---- ペア管理（コーチ専用） ----
+
+/**
+ * ペア設定一覧を取得する。
+ */
+export async function getEvaluationPairs(): Promise<EvaluationPair[]> {
+  if (!isSupabaseConfigured()) return [...demoEvaluationPairs]
+  const { data, error } = await getSupabase()
+    .from('evaluation_pairs')
+    .select('*')
+    .order('created_at')
+  if (error) {
+    console.error('[data] getEvaluationPairs() でエラーが発生しました:', error.message)
+    return []
+  }
+  return data || []
+}
+
+/**
+ * ペアを追加する（コーチ専用）。
+ */
+export async function addEvaluationPair(
+  playerAId: string,
+  playerBId: string,
+  pairType: string
+): Promise<EvaluationPair> {
+  const now = new Date().toISOString()
+  if (!isSupabaseConfigured()) {
+    const pair: EvaluationPair = {
+      id: `pair-${Date.now()}`,
+      pair_type: pairType,
+      player_a_id: playerAId,
+      player_b_id: playerBId,
+      created_at: now,
+    }
+    demoEvaluationPairs.push(pair)
+    return pair
+  }
+  const { data, error } = await getSupabase()
+    .from('evaluation_pairs')
+    .insert({ pair_type: pairType, player_a_id: playerAId, player_b_id: playerBId })
+    .select()
+    .single()
+  if (error) {
+    console.error('[data] addEvaluationPair() でエラーが発生しました:', error.message)
+    throw error
+  }
+  return data
+}
+
+/**
+ * ペアを削除する（コーチ専用）。
+ */
+export async function deleteEvaluationPair(pairId: string): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    demoEvaluationPairs = demoEvaluationPairs.filter(p => p.id !== pairId)
+    return
+  }
+  const { error } = await getSupabase()
+    .from('evaluation_pairs')
+    .delete()
+    .eq('id', pairId)
+  if (error) {
+    console.error('[data] deleteEvaluationPair() でエラーが発生しました:', error.message)
+    throw error
+  }
+}
+
+// ---- SSC（Start/Stop/Continue）アクションプラン ----
+
+/**
+ * 指定選手の最新SSCアクションプランを取得する。
+ * 日々の入力画面の目標候補・マンダラチャートのサジェストに連動する。
+ * @param userId 対象ユーザーのID
+ */
+export async function getLatestSscPlan(userId: string): Promise<SscPlan | null> {
+  if (!isSupabaseConfigured()) {
+    const plans = demoSscPlans.filter(p => p.user_id === userId)
+    if (plans.length === 0) return null
+    return plans.sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0]
+  }
+  const { data, error } = await getSupabase()
+    .from('ssc_plans')
+    .select('*')
+    .eq('user_id', userId)
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error) {
+    console.error('[data] getLatestSscPlan() でエラーが発生しました:', error.message)
+    return null
+  }
+  return data
+}
+
+/**
+ * SSCアクションプランを保存（upsert）する。
+ * 同一配信IDに対して既に保存済みの場合は上書きする。
+ * @param plan 保存するSSCプラン（id・created_at不要）
+ */
+export async function saveSscPlan(
+  plan: Omit<SscPlan, 'id' | 'created_at'>
+): Promise<SscPlan> {
+  const now = new Date().toISOString()
+  if (!isSupabaseConfigured()) {
+    const existIdx = demoSscPlans.findIndex(
+      p => p.user_id === plan.user_id && p.delivery_id === plan.delivery_id
+    )
+    if (existIdx >= 0) {
+      demoSscPlans[existIdx] = { ...demoSscPlans[existIdx], ...plan, updated_at: now }
+      return demoSscPlans[existIdx]
+    }
+    const newPlan: SscPlan = {
+      id: `ssc-${Date.now()}`,
+      ...plan,
+      created_at: now,
+    }
+    demoSscPlans.push(newPlan)
+    return newPlan
+  }
+  const { data, error } = await getSupabase()
+    .from('ssc_plans')
+    .upsert({ ...plan, updated_at: now }, { onConflict: 'user_id,delivery_id' })
+    .select()
+    .single()
+  if (error) {
+    console.error('[data] saveSscPlan() でエラーが発生しました:', error.message)
+    throw error
+  }
+  return data
+}
+
+// ---- 評価スコア集計ユーティリティ ----
+
+/**
+ * 回答リストからカテゴリ別平均スコアを算出する。
+ * レーダーチャート描画に使用する。
+ * @param answers      対象の回答リスト
+ * @param evaluatorId  自己評価の場合は自分のID、他者評価の場合は null（全他者評価の平均）
+ */
+export function calcCategoryScores(
+  answers: EvaluationAnswer[],
+  evaluatorId?: string
+): Record<string, number> {
+  const filtered = evaluatorId
+    ? answers.filter(a => a.evaluator_id === evaluatorId)
+    : answers
+
+  const result: Record<string, { sum: number; count: number }> = {}
+  for (const q of EVALUATION_QUESTIONS) {
+    if (!result[q.category]) result[q.category] = { sum: 0, count: 0 }
+    const ans = filtered.find(a => a.question_id === q.id)
+    if (ans) {
+      result[q.category].sum += ans.score
+      result[q.category].count++
+    }
+  }
+  const out: Record<string, number> = {}
+  for (const cat of EVALUATION_CATEGORIES) {
+    const d = result[cat]
+    out[cat] = d && d.count > 0 ? Math.round((d.sum / d.count) * 10) / 10 : 0
+  }
+  return out
 }
 
