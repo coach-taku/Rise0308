@@ -287,3 +287,74 @@ ALTER TABLE goal_update_phases DISABLE ROW LEVEL SECURITY;
 -- ALTER TABLE mandala_charts ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 -- CREATE INDEX IF NOT EXISTS idx_mandala_charts_status ON mandala_charts(user_id, status);
 -- 続けて mandala_reflections / goal_update_phases の CREATE TABLE を実行し、RLS を無効化してください。
+
+-- ============================================================
+-- 12. 10ヶ条評価・SSC連動機能（2026-07-26 追加）
+--     既存 Supabase プロジェクトへの適用: 以下の全ブロックを
+--     Supabase SQL Editor に貼り付けて一括実行してください。
+--     すべて IF NOT EXISTS のため、再実行しても安全です。
+-- ============================================================
+
+-- 12-1. evaluation_deliveries（配信管理）
+CREATE TABLE IF NOT EXISTS evaluation_deliveries (
+  id            uuid        DEFAULT gen_random_uuid() PRIMARY KEY,
+  label         text        NOT NULL,
+  created_by    uuid        REFERENCES users(id) ON DELETE SET NULL,
+  delivered_at  timestamptz DEFAULT now(),
+  created_at    timestamptz DEFAULT now()
+);
+ALTER TABLE evaluation_deliveries DISABLE ROW LEVEL SECURITY;
+
+-- 12-2. evaluation_tasks（評価タスク）
+CREATE TABLE IF NOT EXISTS evaluation_tasks (
+  id            uuid        DEFAULT gen_random_uuid() PRIMARY KEY,
+  delivery_id   uuid        NOT NULL REFERENCES evaluation_deliveries(id) ON DELETE CASCADE,
+  evaluator_id  uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  target_id     uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status        text        NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'completed')),
+  delivered_at  timestamptz DEFAULT now(),
+  completed_at  timestamptz,
+  created_at    timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_evaluation_tasks_evaluator ON evaluation_tasks(evaluator_id);
+CREATE INDEX IF NOT EXISTS idx_evaluation_tasks_delivery  ON evaluation_tasks(delivery_id);
+ALTER TABLE evaluation_tasks DISABLE ROW LEVEL SECURITY;
+
+-- 12-3. evaluation_answers（回答）
+CREATE TABLE IF NOT EXISTS evaluation_answers (
+  id            uuid        DEFAULT gen_random_uuid() PRIMARY KEY,
+  task_id       uuid        NOT NULL REFERENCES evaluation_tasks(id) ON DELETE CASCADE,
+  evaluator_id  uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  target_id     uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  question_id   integer     NOT NULL CHECK (question_id BETWEEN 1 AND 30),
+  score         integer     NOT NULL CHECK (score BETWEEN 1 AND 5),
+  created_at    timestamptz DEFAULT now(),
+  UNIQUE (task_id, question_id)
+);
+CREATE INDEX IF NOT EXISTS idx_evaluation_answers_target ON evaluation_answers(target_id);
+ALTER TABLE evaluation_answers DISABLE ROW LEVEL SECURITY;
+
+-- 12-4. evaluation_pairs（ペア設定）
+CREATE TABLE IF NOT EXISTS evaluation_pairs (
+  id            uuid        DEFAULT gen_random_uuid() PRIMARY KEY,
+  pair_type     text        NOT NULL DEFAULT 'default',
+  player_a_id   uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  player_b_id   uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at    timestamptz DEFAULT now(),
+  UNIQUE (player_a_id, player_b_id)
+);
+ALTER TABLE evaluation_pairs DISABLE ROW LEVEL SECURITY;
+
+-- 12-5. ssc_plans（Start/Stop/Continue アクションプラン）
+CREATE TABLE IF NOT EXISTS ssc_plans (
+  id              uuid        DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id         uuid        REFERENCES users(id) ON DELETE CASCADE,
+  delivery_id     text        NOT NULL,
+  start_action    text        DEFAULT '',
+  stop_action     text        DEFAULT '',
+  continue_action text        DEFAULT '',
+  created_at      timestamptz DEFAULT now(),
+  updated_at      timestamptz DEFAULT now(),
+  UNIQUE (user_id, delivery_id)
+);
+ALTER TABLE ssc_plans DISABLE ROW LEVEL SECURITY;
