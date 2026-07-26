@@ -1854,9 +1854,10 @@ export async function deliverEvaluationTasks(
   const supabase = getSupabase()
 
   // 1. 配信レコードを作成する
+  //    id フィールドは渡さず、DB側の DEFAULT gen_random_uuid() に自動採番させる
   const { data: delivery, error: dErr } = await supabase
     .from('evaluation_deliveries')
-    .insert({ id: deliveryId, label, created_by: coachId, delivered_at: now })
+    .insert({ label, created_by: coachId, delivered_at: now })
     .select()
     .single()
   if (dErr) {
@@ -1864,17 +1865,21 @@ export async function deliverEvaluationTasks(
     throw dErr
   }
 
+  // DB が自動生成した UUID を使用する
+  const actualDeliveryId: string = delivery.id
+
   // 2. ペア設定を取得する
   const { data: pairs } = await supabase.from('evaluation_pairs').select('*')
   const pairList: EvaluationPair[] = pairs || []
 
   // 3. タスクを生成する
+  //    id フィールドは渡さず、DB側の DEFAULT gen_random_uuid() に自動採番させる
   const tasks: Omit<EvaluationTask, 'id'>[] = []
   const playerIds = players.map(p => p.id)
   for (const player of players) {
     // 自己評価
     tasks.push({
-      delivery_id: deliveryId,
+      delivery_id: actualDeliveryId,
       evaluator_id: player.id,
       target_id: player.id,
       status: 'pending',
@@ -1890,7 +1895,7 @@ export async function deliverEvaluationTasks(
       const targetId = pair.player_a_id === player.id ? pair.player_b_id : pair.player_a_id
       if (!playerIds.includes(targetId)) continue
       tasks.push({
-        delivery_id: deliveryId,
+        delivery_id: actualDeliveryId,
         evaluator_id: player.id,
         target_id: targetId,
         status: 'pending',
@@ -1901,7 +1906,11 @@ export async function deliverEvaluationTasks(
     }
   }
   if (tasks.length > 0) {
-    await supabase.from('evaluation_tasks').insert(tasks)
+    const { error: tErr } = await supabase.from('evaluation_tasks').insert(tasks)
+    if (tErr) {
+      console.error('[data] deliverEvaluationTasks() タスク作成エラー:', tErr.message)
+      throw tErr
+    }
   }
   return delivery
 }
