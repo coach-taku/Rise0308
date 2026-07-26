@@ -2074,6 +2074,122 @@ export async function submitEvaluationAnswers(
 }
 
 /**
+ * 選手の成長推移データを配信単位で取得する。
+ * 各配信の自己評価合計点・他者評価平均合計点を時系列で返す。
+ * @param playerId 対象選手のuser_id
+ */
+export async function getEvaluationHistoryForPlayer(
+  playerId: string
+): Promise<{
+  deliveryId: string
+  label: string
+  deliveredAt: string
+  selfTotal: number | null       // 自己評価の全問合計（最大150点）
+  othersTotal: number | null     // 他者評価の平均合計（最大150点）
+}[]> {
+  if (!isSupabaseConfigured()) {
+    // デモ: demoEvaluationDeliveries × demoEvaluationAnswers で算出
+    return demoEvaluationDeliveries
+      .slice()
+      .sort((a, b) => a.delivered_at.localeCompare(b.delivered_at))
+      .map(delivery => {
+        const taskIds = demoEvaluationTasks
+          .filter(t => t.delivery_id === delivery.id)
+          .map(t => t.id)
+        const allAns = demoEvaluationAnswers.filter(
+          a => a.target_id === playerId && taskIds.includes(a.task_id)
+        )
+        const selfAns = allAns.filter(a => a.evaluator_id === playerId)
+        const othersAns = allAns.filter(a => a.evaluator_id !== playerId)
+
+        const selfTotal = selfAns.length === 30
+          ? selfAns.reduce((s, a) => s + a.score, 0)
+          : null
+
+        let othersTotal: number | null = null
+        if (othersAns.length > 0) {
+          // 評価者別に合計を出して平均を取る
+          const evaluatorIds = Array.from(new Set(othersAns.map(a => a.evaluator_id)))
+          const totals = evaluatorIds.map(eid => {
+            const byEval = othersAns.filter(a => a.evaluator_id === eid)
+            return byEval.length === 30 ? byEval.reduce((s, a) => s + a.score, 0) : null
+          }).filter((v): v is number => v !== null)
+          if (totals.length > 0) {
+            othersTotal = Math.round(totals.reduce((s, v) => s + v, 0) / totals.length * 10) / 10
+          }
+        }
+
+        return {
+          deliveryId: delivery.id,
+          label: delivery.label,
+          deliveredAt: delivery.delivered_at,
+          selfTotal,
+          othersTotal,
+        }
+      })
+      .filter(d => d.selfTotal !== null || d.othersTotal !== null)
+  }
+
+  // Supabase: delivery 一覧取得 → 各deliveryのtask/answerを集約
+  const supabase = getSupabase()
+  const { data: deliveries, error: dErr } = await supabase
+    .from('evaluation_deliveries')
+    .select('id, label, delivered_at')
+    .order('delivered_at', { ascending: true })
+  if (dErr || !deliveries || deliveries.length === 0) return []
+
+  // 該当選手のタスク+回答を一括取得
+  const { data: tasks } = await supabase
+    .from('evaluation_tasks')
+    .select('id, delivery_id, evaluator_id')
+    .eq('target_id', playerId)
+    .eq('status', 'completed')
+  const taskList: { id: string; delivery_id: string; evaluator_id: string }[] = tasks || []
+  if (taskList.length === 0) return []
+
+  const { data: answers } = await supabase
+    .from('evaluation_answers')
+    .select('task_id, evaluator_id, score')
+    .eq('target_id', playerId)
+    .in('task_id', taskList.map(t => t.id))
+  const answerList: { task_id: string; evaluator_id: string; score: number }[] = answers || []
+
+  return deliveries.map((delivery: { id: string; label: string; delivered_at: string }) => {
+    const deliveryTaskIds = taskList
+      .filter(t => t.delivery_id === delivery.id)
+      .map(t => t.id)
+    const deliveryAnswers = answerList.filter(a => deliveryTaskIds.includes(a.task_id))
+
+    const selfAns = deliveryAnswers.filter(a => a.evaluator_id === playerId)
+    const othersAns = deliveryAnswers.filter(a => a.evaluator_id !== playerId)
+
+    const selfTotal = selfAns.length === 30
+      ? selfAns.reduce((s, a) => s + a.score, 0)
+      : null
+
+    let othersTotal: number | null = null
+    if (othersAns.length > 0) {
+      const evaluatorIds = Array.from(new Set(othersAns.map(a => a.evaluator_id)))
+      const totals = evaluatorIds.map(eid => {
+        const byEval = othersAns.filter(a => a.evaluator_id === eid)
+        return byEval.length === 30 ? byEval.reduce((s, a) => s + a.score, 0) : null
+      }).filter((v): v is number => v !== null)
+      if (totals.length > 0) {
+        othersTotal = Math.round(totals.reduce((s, v) => s + v, 0) / totals.length * 10) / 10
+      }
+    }
+
+    return {
+      deliveryId: delivery.id,
+      label: delivery.label,
+      deliveredAt: delivery.delivered_at,
+      selfTotal,
+      othersTotal,
+    }
+  }).filter(d => d.selfTotal !== null || d.othersTotal !== null)
+}
+
+/**
  * 指定選手に対する全評価回答を取得する（自己評価 + 他者評価）。
  * レーダーチャート表示に使用する。
  * @param targetId   被評価者（評価される側）のuser_id

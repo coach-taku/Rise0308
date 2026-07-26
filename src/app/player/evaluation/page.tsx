@@ -8,6 +8,7 @@ import {
   EVALUATION_CATEGORIES,
   getPendingEvaluationTasks,
   getEvaluationAnswersForTarget,
+  getEvaluationHistoryForPlayer,
   submitEvaluationAnswers,
   getLatestSscPlan,
   saveSscPlan,
@@ -20,6 +21,7 @@ import BottomNav from '@/components/BottomNav'
 import {
   Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
   ResponsiveContainer, Legend, Tooltip,
+  LineChart, Line, CartesianGrid, XAxis, YAxis,
 } from 'recharts'
 
 // ============================================================
@@ -30,6 +32,16 @@ type PageMode =
   | 'answering'    // アンケート回答中
   | 'result'       // 自分への評価結果（レーダーチャート）
   | 'ssc_input'    // Start/Stop/Continue入力
+  | 'growth'       // 成長トレンド折れ線グラフ
+
+// 成長履歴データ型
+type HistoryEntry = {
+  deliveryId: string
+  label: string
+  deliveredAt: string
+  selfTotal: number | null
+  othersTotal: number | null
+}
 
 export default function EvaluationPage() {
   const router = useRouter()
@@ -56,6 +68,10 @@ export default function EvaluationPage() {
   const [selfAnswers, setSelfAnswers] = useState<EvaluationAnswer[]>([])
   const [allAnswers, setAllAnswers] = useState<EvaluationAnswer[]>([])
   const [resultLoading, setResultLoading] = useState(false)
+
+  // ---- 成長グラフ ----
+  const [historyData, setHistoryData] = useState<HistoryEntry[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
 
   // ---- SSC入力 ----
   const [existingSscPlan, setExistingSscPlan] = useState<SscPlan | null>(null)
@@ -134,6 +150,21 @@ export default function EvaluationPage() {
     }
   }
 
+  // ---- 成長グラフを表示する ----
+  const showGrowthGraph = async () => {
+    if (!user) return
+    setHistoryLoading(true)
+    try {
+      const data = await getEvaluationHistoryForPlayer(user.id)
+      setHistoryData(data)
+      setMode('growth')
+    } catch (e) {
+      console.error('[evaluation] 成長履歴取得エラー:', e)
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
+
   // ---- 自分への評価結果を表示する ----
   const showMyResult = async () => {
     if (!user) return
@@ -197,6 +228,200 @@ export default function EvaluationPage() {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="animate-pulse text-brand-main text-xl font-bold">読み込み中...</div>
+      </div>
+    )
+  }
+
+  // ============================================================
+  // 成長グラフ画面
+  // ============================================================
+  if (mode === 'growth') {
+    const hasHistory = historyData.length >= 1
+
+    // 最初と最後の差分（成長バッジ用）
+    const firstEntry = historyData[0]
+    const lastEntry = historyData[historyData.length - 1]
+    const selfDelta =
+      hasHistory && firstEntry.selfTotal !== null && lastEntry.selfTotal !== null
+        ? lastEntry.selfTotal - firstEntry.selfTotal
+        : null
+    const othersDelta =
+      hasHistory && firstEntry.othersTotal !== null && lastEntry.othersTotal !== null
+        ? lastEntry.othersTotal - firstEntry.othersTotal
+        : null
+
+    // チャート用データ（null を undefined に変換 → recharts が線を断絶する）
+    const chartData = historyData.map(d => ({
+      name: d.label,
+      自己評価合計: d.selfTotal ?? undefined,
+      他者評価平均合計: d.othersTotal ?? undefined,
+    }))
+
+    return (
+      <div className="min-h-screen bg-brand-bg pb-24 md:pb-8">
+        <Header userName={user.name} role="player" />
+        <main className="max-w-2xl mx-auto px-4 py-4 space-y-4">
+          {/* ヘッダー */}
+          <div className="bg-white rounded-2xl p-4 shadow-sm">
+            <button
+              onClick={() => setMode('task_list')}
+              className="text-sm text-gray-500 hover:text-gray-700 mb-2 flex items-center gap-1"
+            >
+              ← 一覧に戻る
+            </button>
+            <h2 className="text-lg font-bold text-brand-dark">📈 成長グラフ</h2>
+            <p className="text-xs text-gray-500 mt-1">
+              過去の評価ごとの合計点推移を確認しよう。自己評価（黄）と他者評価平均（青）の変化が成長の証。
+            </p>
+          </div>
+
+          {!hasHistory ? (
+            <div className="bg-white rounded-2xl p-10 shadow-sm text-center">
+              <p className="text-4xl mb-3">📭</p>
+              <p className="text-gray-500 font-medium">まだ履歴データがありません</p>
+              <p className="text-gray-400 text-xs mt-1">
+                アンケートを1回以上完了すると、ここに成長の軌跡が表示されます。
+              </p>
+            </div>
+          ) : (
+            <>
+              {/* 成長バッジ */}
+              {(selfDelta !== null || othersDelta !== null) && historyData.length >= 2 && (
+                <div className="grid grid-cols-2 gap-3">
+                  {selfDelta !== null && (
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-2xl p-4 text-center">
+                      <p className="text-xs text-yellow-700 font-bold mb-1">自己評価の伸び</p>
+                      <p className={`text-2xl font-black ${
+                        selfDelta > 0 ? 'text-green-600' : selfDelta < 0 ? 'text-red-500' : 'text-gray-500'
+                      }`}>
+                        {selfDelta > 0 ? '+' : ''}{selfDelta}
+                        <span className="text-xs font-normal text-gray-400 ml-1">pt</span>
+                      </p>
+                      <p className="text-xs text-gray-400 mt-0.5">初回→最新</p>
+                    </div>
+                  )}
+                  {othersDelta !== null && (
+                    <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 text-center">
+                      <p className="text-xs text-blue-700 font-bold mb-1">他者評価の伸び</p>
+                      <p className={`text-2xl font-black ${
+                        othersDelta > 0 ? 'text-green-600' : othersDelta < 0 ? 'text-red-500' : 'text-gray-500'
+                      }`}>
+                        {othersDelta > 0 ? '+' : ''}{othersDelta}
+                        <span className="text-xs font-normal text-gray-400 ml-1">pt</span>
+                      </p>
+                      <p className="text-xs text-gray-400 mt-0.5">初回→最新</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 折れ線グラフ */}
+              <div className="bg-white rounded-2xl p-4 shadow-sm">
+                <h3 className="text-sm font-bold text-gray-700 mb-1">
+                  合計点の推移
+                  <span className="text-xs font-normal text-gray-400 ml-2">（満点 150点）</span>
+                </h3>
+                <p className="text-xs text-gray-400 mb-3">
+                  横軸：配信回、縦軸：30問の合計スコア
+                </p>
+                <ResponsiveContainer width="100%" height={240}>
+                  <LineChart data={chartData} margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis
+                      dataKey="name"
+                      tick={{ fontSize: 10, fill: '#6b7280' }}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      domain={[0, 150]}
+                      ticks={[0, 30, 60, 90, 120, 150]}
+                      tick={{ fontSize: 10, fill: '#6b7280' }}
+                      tickLine={false}
+                      axisLine={false}
+                      width={30}
+                    />
+                    <Tooltip
+                      contentStyle={{ borderRadius: '10px', fontSize: '12px', border: '1px solid #e5e7eb' }}
+                      formatter={(value: number, name: string) => [
+                        `${value} pt`,
+                        name,
+                      ]}
+                    />
+                    <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '8px' }} />
+                    <Line
+                      type="monotone"
+                      dataKey="自己評価合計"
+                      stroke="#e1c614"
+                      strokeWidth={2.5}
+                      dot={{ r: 4, fill: '#e1c614', strokeWidth: 2, stroke: '#fff' }}
+                      activeDot={{ r: 6 }}
+                      connectNulls={false}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="他者評価平均合計"
+                      stroke="#3b82f6"
+                      strokeWidth={2.5}
+                      strokeDasharray="5 4"
+                      dot={{ r: 4, fill: '#3b82f6', strokeWidth: 2, stroke: '#fff' }}
+                      activeDot={{ r: 6 }}
+                      connectNulls={false}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* 履歴テーブル */}
+              <div className="bg-white rounded-2xl p-4 shadow-sm">
+                <h3 className="text-sm font-bold text-gray-700 mb-3">回別スコア一覧</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-gray-100">
+                        <th className="text-left py-2 pr-2 text-gray-500 font-medium">配信回</th>
+                        <th className="text-right py-2 px-2 text-yellow-600 font-bold">自己評価</th>
+                        <th className="text-right py-2 pl-2 text-blue-500 font-bold">他者評価平均</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historyData.map((entry, idx) => (
+                        <tr
+                          key={entry.deliveryId}
+                          className={idx % 2 === 0 ? 'bg-gray-50/50' : ''}
+                        >
+                          <td className="py-2 pr-2 text-gray-700 font-medium">{entry.label}</td>
+                          <td className="py-2 px-2 text-right">
+                            {entry.selfTotal !== null
+                              ? <span className="font-bold text-yellow-700">{entry.selfTotal}<span className="text-gray-400 font-normal">/150</span></span>
+                              : <span className="text-gray-300">—</span>
+                            }
+                          </td>
+                          <td className="py-2 pl-2 text-right">
+                            {entry.othersTotal !== null
+                              ? <span className="font-bold text-blue-600">{entry.othersTotal}<span className="text-gray-400 font-normal">/150</span></span>
+                              : <span className="text-gray-300">—</span>
+                            }
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* 結果画面へ誘導 */}
+              <button
+                onClick={showMyResult}
+                disabled={resultLoading}
+                className="w-full bg-white border border-gray-200 rounded-2xl p-4 hover:shadow-md transition-all text-center disabled:opacity-50"
+              >
+                <span className="text-xl block">📊</span>
+                <span className="text-sm font-bold text-brand-dark">最新のレーダーチャートを見る</span>
+              </button>
+            </>
+          )}
+        </main>
+        <BottomNav role="player" />
       </div>
     )
   }
@@ -612,7 +837,7 @@ export default function EvaluationPage() {
           )}
         </div>
 
-        {/* 結果確認・SSCプランへの導線 */}
+        {/* 結果確認・SSCプラン・成長グラフへの導線 */}
         <div className="grid grid-cols-2 gap-3">
           <button
             onClick={showMyResult}
@@ -632,6 +857,17 @@ export default function EvaluationPage() {
             <span className="text-xs text-gray-500 block">Start / Stop / Continue</span>
           </button>
         </div>
+        <button
+          onClick={showGrowthGraph}
+          disabled={historyLoading}
+          className="w-full bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-2xl p-4 shadow-sm hover:shadow-md transition-all text-center disabled:opacity-50"
+        >
+          <span className="text-2xl block">📈</span>
+          <span className="text-sm font-bold text-green-800 mt-1 block">
+            {historyLoading ? '読み込み中...' : '成長グラフ'}
+          </span>
+          <span className="text-xs text-green-600 block">自己・他者評価の点数推移</span>
+        </button>
 
         {/* 説明カード */}
         <div className="bg-yellow-50 border border-yellow-200 rounded-2xl p-4">
