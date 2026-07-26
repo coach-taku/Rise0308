@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { User, DailyRecord, DailyRecordWithUser, Tournament, PhysicalRecord, MaxTrainingRecord, PracticeSession, GoalUpdatePhase, EvaluationDelivery, EvaluationAnswer } from '@/types/database'
-import { getUsers, getAllDailyRecords, getActiveTournament, addComment, updateComment, getTeamConditionRecords, getAllPhysicalRecords, getAllMaxTrainingRecords, getPracticeSession, getPracticeSessions, upsertPracticeSession, getMindsetScores, getActiveGoalUpdatePhase, startGoalUpdatePhase, endGoalUpdatePhase, getEvaluationDeliveries, deliverEvaluationTasks, getAllEvaluationAnswers, getEvaluationPairs, addEvaluationPair, deleteEvaluationPair, EVALUATION_CATEGORIES, calcCategoryScores } from '@/lib/data'
+import { User, DailyRecord, DailyRecordWithUser, Tournament, PhysicalRecord, MaxTrainingRecord, PracticeSession, GoalUpdatePhase, EvaluationDelivery, EvaluationAnswer, EvaluationGroup, EvaluationGroupMember } from '@/types/database'
+import { getUsers, getAllDailyRecords, getActiveTournament, addComment, updateComment, getTeamConditionRecords, getAllPhysicalRecords, getAllMaxTrainingRecords, getPracticeSession, getPracticeSessions, upsertPracticeSession, getMindsetScores, getActiveGoalUpdatePhase, startGoalUpdatePhase, endGoalUpdatePhase, getEvaluationDeliveries, deliverEvaluationTasks, getAllEvaluationAnswers, getEvaluationGroups, addEvaluationGroup, updateEvaluationGroup, deleteEvaluationGroup, addEvaluationGroupMember, removeEvaluationGroupMember, updateEvaluationDelivery, EVALUATION_CATEGORIES, calcCategoryScores } from '@/lib/data'
 import { getSession } from '@/lib/session'
 import Header from '@/components/Header'
 import BottomNav from '@/components/BottomNav'
@@ -157,6 +157,37 @@ export default function CoachDashboard() {
   const [deliveryLabel, setDeliveryLabel] = useState('')
   const [delivering, setDelivering] = useState(false)
   const [deliverFeedback, setDeliverFeedback] = useState(false)
+  // グループ設定
+  type GroupWithMembers = EvaluationGroup & { members: EvaluationGroupMember[] }
+  const [evaluationGroups, setEvaluationGroups] = useState<GroupWithMembers[]>([])
+  const [groupsLoading, setGroupsLoading] = useState(false)
+  // グループ作成モーダル
+  const [showGroupModal, setShowGroupModal] = useState(false)
+  const [newGroupName, setNewGroupName] = useState('')
+  const [newGroupType, setNewGroupType] = useState('custom')
+  const [groupSaving, setGroupSaving] = useState(false)
+  // メンバー追加モーダル
+  const [showMemberModal, setShowMemberModal] = useState(false)
+  const [targetGroupId, setTargetGroupId] = useState<string | null>(null)
+  const [memberAddUserId, setMemberAddUserId] = useState<string>('')
+  const [memberSaving, setMemberSaving] = useState(false)
+  // フィードバック
+  const [groupFeedback, setGroupFeedback] = useState<string | null>(null)
+  const [deletingGroupId, setDeletingGroupId] = useState<string | null>(null)
+  const [removingMemberId, setRemovingMemberId] = useState<string | null>(null)
+
+  // ---- グループ編集モーダル ----
+  const [showEditGroupModal, setShowEditGroupModal] = useState(false)
+  const [editGroupId, setEditGroupId] = useState<string | null>(null)
+  const [editGroupName, setEditGroupName] = useState('')
+  const [editGroupType, setEditGroupType] = useState('custom')
+  const [editGroupSaving, setEditGroupSaving] = useState(false)
+
+  // ---- 配信名編集モーダル ----
+  const [showEditDeliveryModal, setShowEditDeliveryModal] = useState(false)
+  const [editDeliveryId, setEditDeliveryId] = useState<string | null>(null)
+  const [editDeliveryLabel, setEditDeliveryLabel] = useState('')
+  const [editDeliverySaving, setEditDeliverySaving] = useState(false)
 
   useEffect(() => {
     const session = getSession()
@@ -393,8 +424,12 @@ export default function CoachDashboard() {
   const loadEvaluationData = async () => {
     setEvaluationLoading(true)
     try {
-      const deliveries = await getEvaluationDeliveries()
+      const [deliveries, groups] = await Promise.all([
+        getEvaluationDeliveries(),
+        getEvaluationGroups(),
+      ])
       setEvaluationDeliveries(deliveries)
+      setEvaluationGroups(groups)
       // 最新の配信を自動選択する
       if (deliveries.length > 0 && !selectedDeliveryId) {
         const latestId = deliveries[0].id
@@ -442,6 +477,161 @@ export default function CoachDashboard() {
       alert('配信に失敗しました。再度お試しください。')
     } finally {
       setDelivering(false)
+    }
+  }
+
+  // ---- グループ作成処理 ----
+  const handleAddGroup = async () => {
+    if (!user || !newGroupName.trim()) return
+    setGroupSaving(true)
+    try {
+      const newGroup = await addEvaluationGroup(newGroupName.trim(), newGroupType, user.id)
+      setEvaluationGroups(prev => [...prev, { ...newGroup, members: [] }])
+      setNewGroupName('')
+      setNewGroupType('custom')
+      setShowGroupModal(false)
+      setGroupFeedback('group-created')
+      setTimeout(() => setGroupFeedback(null), 3000)
+    } catch (e) {
+      console.error('[coach] グループ作成エラー:', e)
+      alert('グループの作成に失敗しました。再度お試しください。')
+    } finally {
+      setGroupSaving(false)
+    }
+  }
+
+  // ---- グループ削除処理 ----
+  const handleDeleteGroup = async (groupId: string) => {
+    if (!confirm('このグループを削除しますか？\nメンバー設定もすべて削除されます。')) return
+    setDeletingGroupId(groupId)
+    try {
+      await deleteEvaluationGroup(groupId)
+      setEvaluationGroups(prev => prev.filter(g => g.id !== groupId))
+    } catch (e) {
+      console.error('[coach] グループ削除エラー:', e)
+      alert('削除に失敗しました。再度お試しください。')
+    } finally {
+      setDeletingGroupId(null)
+    }
+  }
+
+  // ---- メンバー追加処理 ----
+  const handleAddMember = async () => {
+    if (!targetGroupId || !memberAddUserId) return
+    const group = evaluationGroups.find(g => g.id === targetGroupId)
+    if (!group) return
+    // 重複チェック
+    if (group.members.some(m => m.user_id === memberAddUserId)) {
+      setGroupFeedback('error-dup-member')
+      setTimeout(() => setGroupFeedback(null), 3000)
+      return
+    }
+    setMemberSaving(true)
+    try {
+      const newMember = await addEvaluationGroupMember(targetGroupId, memberAddUserId)
+      setEvaluationGroups(prev =>
+        prev.map(g =>
+          g.id === targetGroupId ? { ...g, members: [...g.members, newMember] } : g
+        )
+      )
+      setMemberAddUserId('')
+      setGroupFeedback('member-added')
+      setTimeout(() => setGroupFeedback(null), 3000)
+    } catch (e) {
+      console.error('[coach] メンバー追加エラー:', e)
+      alert('メンバーの追加に失敗しました。再度お試しください。')
+    } finally {
+      setMemberSaving(false)
+    }
+  }
+
+  // ---- メンバー削除処理 ----
+  const handleRemoveMember = async (memberId: string, groupId: string) => {
+    setRemovingMemberId(memberId)
+    try {
+      await removeEvaluationGroupMember(memberId)
+      setEvaluationGroups(prev =>
+        prev.map(g =>
+          g.id === groupId ? { ...g, members: g.members.filter(m => m.id !== memberId) } : g
+        )
+      )
+    } catch (e) {
+      console.error('[coach] メンバー削除エラー:', e)
+      alert('削除に失敗しました。再度お試しください。')
+    } finally {
+      setRemovingMemberId(null)
+    }
+  }
+
+  // ---- グループ一覧再読み込み ----
+  const reloadGroups = async () => {
+    setGroupsLoading(true)
+    try {
+      const groups = await getEvaluationGroups()
+      setEvaluationGroups(groups)
+    } catch (e) {
+      console.error('[coach] グループ取得エラー:', e)
+    } finally {
+      setGroupsLoading(false)
+    }
+  }
+
+  // ---- グループ編集モーダルを開く ----
+  const openEditGroupModal = (group: GroupWithMembers) => {
+    setEditGroupId(group.id)
+    setEditGroupName(group.name)
+    setEditGroupType(group.group_type || 'custom')
+    setShowEditGroupModal(true)
+  }
+
+  // ---- グループ名・種別を保存する ----
+  const handleSaveEditGroup = async () => {
+    if (!editGroupId || !editGroupName.trim()) return
+    setEditGroupSaving(true)
+    try {
+      await updateEvaluationGroup(editGroupId, editGroupName.trim(), editGroupType)
+      setEvaluationGroups(prev =>
+        prev.map(g =>
+          g.id === editGroupId
+            ? { ...g, name: editGroupName.trim(), group_type: editGroupType }
+            : g
+        )
+      )
+      setShowEditGroupModal(false)
+      setGroupFeedback('group-updated')
+      setTimeout(() => setGroupFeedback(null), 3000)
+    } catch (e) {
+      console.error('[coach] グループ更新エラー:', e)
+      alert('更新に失敗しました。再度お試しください。')
+    } finally {
+      setEditGroupSaving(false)
+    }
+  }
+
+  // ---- 配信名編集モーダルを開く ----
+  const openEditDeliveryModal = (delivery: EvaluationDelivery) => {
+    setEditDeliveryId(delivery.id)
+    setEditDeliveryLabel(delivery.label)
+    setShowEditDeliveryModal(true)
+  }
+
+  // ---- 配信名を保存する（回答・タスクは変更しない） ----
+  const handleSaveEditDelivery = async () => {
+    if (!editDeliveryId || !editDeliveryLabel.trim()) return
+    setEditDeliverySaving(true)
+    try {
+      await updateEvaluationDelivery(editDeliveryId, editDeliveryLabel.trim())
+      setEvaluationDeliveries(prev =>
+        prev.map(d =>
+          d.id === editDeliveryId ? { ...d, label: editDeliveryLabel.trim() } : d
+        )
+      )
+      setShowEditDeliveryModal(false)
+    } catch (e) {
+      console.error('[coach] 配信名更新エラー:', e)
+      alert('更新に失敗しました。再度お試しください。')
+    } finally {
+      setEditDeliverySaving(false)
     }
   }
 
@@ -1492,12 +1682,202 @@ export default function CoachDashboard() {
               </div>
             )}
 
+            {/* グループ管理セクション */}
+            <div className="bg-white rounded-2xl p-4 shadow-sm">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h3 className="text-sm font-bold text-gray-700">👥 他者評価グループ設定</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    グループ内の全メンバーが互いに他者評価します（N人→N×(N-1)タスク自動生成）
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={reloadGroups}
+                    disabled={groupsLoading}
+                    className="text-xs text-gray-400 hover:text-gray-600 transition-colors p-1.5 rounded-lg hover:bg-gray-100"
+                    title="再読み込み"
+                  >
+                    🔄
+                  </button>
+                  <button
+                    onClick={() => { setNewGroupName(''); setNewGroupType('custom'); setShowGroupModal(true) }}
+                    className="bg-brand-main text-brand-dark font-bold px-4 py-2 rounded-xl hover:bg-yellow-400 transition-colors text-xs whitespace-nowrap shadow-md"
+                  >
+                    ＋ グループを作成
+                  </button>
+                </div>
+              </div>
+
+              {/* フィードバック */}
+              {groupFeedback === 'group-created' && (
+                <div className="mb-3 bg-green-50 border border-green-200 rounded-xl px-3 py-2 text-xs text-green-700 font-bold">
+                  ✅ グループを作成しました
+                </div>
+              )}
+              {groupFeedback === 'group-updated' && (
+                <div className="mb-3 bg-green-50 border border-green-200 rounded-xl px-3 py-2 text-xs text-green-700 font-bold">
+                  ✅ グループ情報を更新しました
+                </div>
+              )}
+              {groupFeedback === 'member-added' && (
+                <div className="mb-3 bg-green-50 border border-green-200 rounded-xl px-3 py-2 text-xs text-green-700 font-bold">
+                  ✅ メンバーを追加しました
+                </div>
+              )}
+              {groupFeedback === 'error-dup-member' && (
+                <div className="mb-3 bg-orange-50 border border-orange-200 rounded-xl px-3 py-2 text-xs text-orange-700 font-bold">
+                  ⚠️ この選手はすでにグループに追加されています
+                </div>
+              )}
+
+              {/* グループ一覧 */}
+              {groupsLoading ? (
+                <div className="text-center py-4 text-gray-400 text-xs">読み込み中...</div>
+              ) : evaluationGroups.length === 0 ? (
+                <div className="text-center py-6 text-gray-400 text-xs bg-gray-50 rounded-xl">
+                  <p className="text-2xl mb-1">👥</p>
+                  <p>グループが登録されていません</p>
+                  <p className="mt-0.5">「＋ グループを作成」からグループを登録してください</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {evaluationGroups.map(group => {
+                    const memberCount = group.members.length
+                    const taskCount = memberCount * (memberCount - 1)
+                    const isTarget = targetGroupId === group.id && showMemberModal
+                    return (
+                      <div key={group.id} className="border border-gray-200 rounded-xl overflow-hidden">
+                        {/* グループヘッダー */}
+                        <div className="flex items-center justify-between px-3 py-2.5 bg-gray-50">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="font-bold text-gray-800 text-sm truncate">{group.name}</span>
+                            {group.group_type && group.group_type !== 'custom' && (
+                              <span className="text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full flex-shrink-0">
+                                {group.group_type}
+                              </span>
+                            )}
+                            <span className="text-xs text-gray-400 flex-shrink-0">
+                              {memberCount}人
+                              {memberCount >= 2 && (
+                                <span className="ml-1 text-blue-500">→ {taskCount}タスク</span>
+                              )}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5 flex-shrink-0">
+                            <button
+                              onClick={() => {
+                                setTargetGroupId(group.id)
+                                setMemberAddUserId('')
+                                setShowMemberModal(true)
+                              }}
+                              className={`text-xs font-medium px-2.5 py-1 rounded-lg transition-colors ${
+                                isTarget
+                                  ? 'bg-brand-main text-brand-dark'
+                                  : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
+                              }`}
+                            >
+                              ＋ メンバー追加
+                            </button>
+                            <button
+                              onClick={() => openEditGroupModal(group)}
+                              className="text-xs text-gray-500 hover:text-gray-800 hover:bg-gray-200 px-2 py-1 rounded-lg transition-colors"
+                            >
+                              ✏️ 修正
+                            </button>
+                            <button
+                              onClick={() => handleDeleteGroup(group.id)}
+                              disabled={deletingGroupId === group.id}
+                              className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
+                            >
+                              {deletingGroupId === group.id ? '削除中...' : '削除'}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* メンバー追加インライン（このグループが選択中の場合） */}
+                        {targetGroupId === group.id && showMemberModal && (
+                          <div className="px-3 py-2.5 bg-blue-50 border-t border-blue-100 flex items-center gap-2">
+                            <select
+                              value={memberAddUserId}
+                              onChange={e => setMemberAddUserId(e.target.value)}
+                              className="flex-1 px-3 py-2 rounded-xl border-2 border-blue-200 focus:border-brand-main focus:outline-none text-sm bg-white"
+                            >
+                              <option value="">選手を選択してください</option>
+                              {allUsers
+                                .filter(u => u.role === 'player' && !group.members.some(m => m.user_id === u.id))
+                                .map(u => (
+                                  <option key={u.id} value={u.id}>
+                                    {u.name}{u.position ? `（${u.position}）` : ''}
+                                  </option>
+                                ))}
+                            </select>
+                            <button
+                              onClick={handleAddMember}
+                              disabled={memberSaving || !memberAddUserId}
+                              className={`flex-shrink-0 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
+                                memberSaving || !memberAddUserId
+                                  ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                                  : 'bg-brand-main text-brand-dark hover:bg-yellow-400'
+                              }`}
+                            >
+                              {memberSaving ? '追加中...' : '追加'}
+                            </button>
+                            <button
+                              onClick={() => { setShowMemberModal(false); setTargetGroupId(null) }}
+                              className="flex-shrink-0 px-3 py-2 rounded-xl text-xs font-medium bg-white text-gray-500 hover:bg-gray-100 border border-gray-200"
+                            >
+                              閉じる
+                            </button>
+                          </div>
+                        )}
+
+                        {/* メンバー一覧 */}
+                        {group.members.length === 0 ? (
+                          <div className="px-3 py-3 text-center text-xs text-gray-400">
+                            メンバーがいません。「＋ メンバー追加」から追加してください。
+                          </div>
+                        ) : (
+                          <div className="divide-y divide-gray-100">
+                            {group.members.map((member, idx) => {
+                              const u = allUsers.find(x => x.id === member.user_id)
+                                || (member.users ? { ...member.users, role: 'player' as const, password: '' } : null)
+                              return (
+                                <div key={member.id} className="flex items-center justify-between px-3 py-2">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs text-gray-400 w-4">{idx + 1}</span>
+                                    <span className="text-sm text-gray-800">{u?.name ?? '不明'}</span>
+                                    {u && 'position' in u && u.position && (
+                                      <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">
+                                        {u.position}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <button
+                                    onClick={() => handleRemoveMember(member.id, group.id)}
+                                    disabled={removingMemberId === member.id}
+                                    className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
+                                  >
+                                    {removingMemberId === member.id ? '削除中...' : '外す'}
+                                  </button>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
             {/* 配信ボタン */}
             <div className="bg-white rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h3 className="text-sm font-bold text-gray-700">📋 10ヶ条評価アンケート</h3>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  配信ボタンを押すと、ペア設定に基づき全選手にアンケートタスクが自動割り当てされます
+                  ペア設定に基づき全選手にアンケートタスクが自動割り当てされます
                 </p>
               </div>
               <button
@@ -1514,17 +1894,27 @@ export default function CoachDashboard() {
                 <h3 className="text-sm font-bold text-gray-700 mb-3">配信履歴</h3>
                 <div className="flex flex-wrap gap-2">
                   {evaluationDeliveries.map((d: EvaluationDelivery) => (
-                    <button
-                      key={d.id}
-                      onClick={() => setSelectedDeliveryId(d.id)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                        selectedDeliveryId === d.id
-                          ? 'bg-brand-main text-brand-dark shadow-md'
-                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                      }`}
-                    >
-                      {d.label}
-                    </button>
+                    <div key={d.id} className="flex items-center gap-1">
+                      <button
+                        onClick={() => setSelectedDeliveryId(d.id)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                          selectedDeliveryId === d.id
+                            ? 'bg-brand-main text-brand-dark shadow-md'
+                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        }`}
+                      >
+                        {d.label}
+                      </button>
+                      <button
+                        onClick={() => openEditDeliveryModal(d)}
+                        className="text-gray-400 hover:text-gray-600 hover:bg-gray-100 p-1 rounded-lg transition-colors"
+                        title="配信名を修正"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3" viewBox="0 0 20 20" fill="currentColor">
+                          <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
+                        </svg>
+                      </button>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -1701,9 +2091,20 @@ export default function CoachDashboard() {
                       }}
                     />
                   </div>
+                  {/* グループ設定サマリー */}
+                  <div className="mb-4 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2.5 text-xs text-blue-700">
+                    👥 登録済みグループ: <span className="font-bold">{evaluationGroups.length} グループ</span>
+                    {evaluationGroups.length > 0 && (
+                      <span className="ml-1">
+                        （総メンバー: {evaluationGroups.reduce((s, g) => s + g.members.length, 0)}人）
+                      </span>
+                    )}
+                    {evaluationGroups.length === 0 && (
+                      <span className="ml-1 text-orange-600">（グループ未登録のため自己評価タスクのみ生成されます）</span>
+                    )}
+                  </div>
                   <p className="text-xs text-gray-400 mb-5 bg-yellow-50 border border-yellow-200 rounded-lg p-3">
                     ⚠️ 配信すると全選手のダッシュボードに通知が表示されます。
-                    ペア設定が未登録の場合、自己評価タスクのみ生成されます。
                   </p>
                   <div className="flex gap-3">
                     <button
@@ -1722,6 +2123,203 @@ export default function CoachDashboard() {
                       }`}
                     >
                       {delivering ? '配信中...' : '配信する'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* グループ作成モーダル */}
+            {showGroupModal && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
+                <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl">
+                  <h3 className="text-lg font-bold text-brand-dark mb-1">👥 グループを作成</h3>
+                  <p className="text-xs text-gray-500 mb-5">
+                    グループ名を入力してください。作成後にメンバーを追加できます。
+                  </p>
+
+                  {/* グループ名 */}
+                  <div className="mb-4">
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      グループ名 <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={newGroupName}
+                      onChange={e => setNewGroupName(e.target.value)}
+                      placeholder="例: Aグループ、シスターグループ1"
+                      className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-brand-main focus:outline-none text-sm"
+                      onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) handleAddGroup() }}
+                    />
+                  </div>
+
+                  {/* グループ種別 */}
+                  <div className="mb-5">
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      種別 <span className="text-gray-400 font-normal">（任意）</span>
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        { value: 'custom', label: 'カスタム' },
+                        { value: 'sister', label: 'シスター' },
+                        { value: 'position', label: '同ポジ' },
+                        { value: 'team', label: 'チーム全体' },
+                      ].map(opt => (
+                        <button
+                          key={opt.value}
+                          onClick={() => setNewGroupType(opt.value)}
+                          className={`px-3 py-2 rounded-xl text-xs font-medium border-2 transition-all ${
+                            newGroupType === opt.value
+                              ? 'border-brand-main bg-yellow-50 text-brand-dark'
+                              : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => { setShowGroupModal(false); setNewGroupName(''); setNewGroupType('custom') }}
+                      className="flex-1 py-2.5 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+                    >
+                      キャンセル
+                    </button>
+                    <button
+                      onClick={handleAddGroup}
+                      disabled={groupSaving || !newGroupName.trim()}
+                      className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${
+                        groupSaving || !newGroupName.trim()
+                          ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                          : 'bg-brand-main text-brand-dark hover:bg-yellow-400 shadow-md'
+                      }`}
+                    >
+                      {groupSaving ? '作成中...' : '作成する'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ---- グループ編集モーダル ---- */}
+            {showEditGroupModal && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
+                <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl">
+                  <h3 className="text-lg font-bold text-brand-dark mb-1">✏️ グループを修正</h3>
+                  <p className="text-xs text-gray-500 mb-5">
+                    グループ名・種別を変更できます。メンバー設定は変わりません。
+                  </p>
+
+                  {/* グループ名 */}
+                  <div className="mb-4">
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      グループ名 <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={editGroupName}
+                      onChange={e => setEditGroupName(e.target.value)}
+                      placeholder="例: Aグループ、シスターグループ1"
+                      className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-brand-main focus:outline-none text-sm"
+                      onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) handleSaveEditGroup() }}
+                    />
+                  </div>
+
+                  {/* グループ種別 */}
+                  <div className="mb-5">
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      種別 <span className="text-gray-400 font-normal">（任意）</span>
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        { value: 'custom', label: 'カスタム' },
+                        { value: 'sister', label: 'シスター' },
+                        { value: 'position', label: '同ポジ' },
+                        { value: 'team', label: 'チーム全体' },
+                      ].map(opt => (
+                        <button
+                          key={opt.value}
+                          onClick={() => setEditGroupType(opt.value)}
+                          className={`px-3 py-2 rounded-xl text-xs font-medium border-2 transition-all ${
+                            editGroupType === opt.value
+                              ? 'border-brand-main bg-yellow-50 text-brand-dark'
+                              : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => { setShowEditGroupModal(false); setEditGroupId(null) }}
+                      className="flex-1 py-2.5 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+                    >
+                      キャンセル
+                    </button>
+                    <button
+                      onClick={handleSaveEditGroup}
+                      disabled={editGroupSaving || !editGroupName.trim()}
+                      className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${
+                        editGroupSaving || !editGroupName.trim()
+                          ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                          : 'bg-brand-main text-brand-dark hover:bg-yellow-400 shadow-md'
+                      }`}
+                    >
+                      {editGroupSaving ? '保存中...' : '保存する'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ---- 配信名編集モーダル ---- */}
+            {showEditDeliveryModal && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
+                <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl">
+                  <h3 className="text-lg font-bold text-brand-dark mb-1">✏️ 配信名を修正</h3>
+                  <p className="text-xs text-gray-500 mb-1">
+                    配信名（ラベル）のみ変更します。
+                  </p>
+                  <p className="text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 mb-5">
+                    ⚠️ 回答データ・タスクは一切変更されません。名前だけが変わります。
+                  </p>
+
+                  <div className="mb-5">
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      配信名 <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={editDeliveryLabel}
+                      onChange={e => setEditDeliveryLabel(e.target.value)}
+                      placeholder="例: 2026年7月 前期評価"
+                      className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-brand-main focus:outline-none text-sm"
+                      onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) handleSaveEditDelivery() }}
+                    />
+                  </div>
+
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => { setShowEditDeliveryModal(false); setEditDeliveryId(null) }}
+                      className="flex-1 py-2.5 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+                    >
+                      キャンセル
+                    </button>
+                    <button
+                      onClick={handleSaveEditDelivery}
+                      disabled={editDeliverySaving || !editDeliveryLabel.trim()}
+                      className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${
+                        editDeliverySaving || !editDeliveryLabel.trim()
+                          ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                          : 'bg-brand-main text-brand-dark hover:bg-yellow-400 shadow-md'
+                      }`}
+                    >
+                      {editDeliverySaving ? '保存中...' : '保存する'}
                     </button>
                   </div>
                 </div>

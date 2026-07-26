@@ -1,4 +1,4 @@
-import { User, Tournament, MandalaChart, MandalaReflection, GoalUpdatePhase, DailyRecord, DailyRecordWithUser, Comment, PhysicalRecord, MaxTrainingRecord, PracticeSession, GameStat, CsvStatRow, EvaluationQuestion, EvaluationTask, EvaluationAnswer, EvaluationDelivery, EvaluationPair, SscPlan } from '@/types/database'
+import { User, Tournament, MandalaChart, MandalaReflection, GoalUpdatePhase, DailyRecord, DailyRecordWithUser, Comment, PhysicalRecord, MaxTrainingRecord, PracticeSession, GameStat, CsvStatRow, EvaluationQuestion, EvaluationTask, EvaluationAnswer, EvaluationDelivery, EvaluationPair, EvaluationGroup, EvaluationGroupMember, SscPlan } from '@/types/database'
 import { getSupabase, isSupabaseConfigured } from './supabase'
 
 // ============================================================
@@ -1754,10 +1754,21 @@ let demoEvaluationDeliveries: EvaluationDelivery[] = []
 let demoEvaluationTasks: EvaluationTask[] = []
 let demoEvaluationAnswers: EvaluationAnswer[] = []
 let demoEvaluationPairs: EvaluationPair[] = [
-  // デモ用ペア（姉妹ペア）
+  // デモ用ペア（後方互換のため残存）
   { id: 'pair-1', pair_type: 'sister', player_a_id: 'player-1', player_b_id: 'player-2', created_at: '2026-01-01T00:00:00Z' },
   { id: 'pair-2', pair_type: 'sister', player_a_id: 'player-3', player_b_id: 'player-4', created_at: '2026-01-01T00:00:00Z' },
 ]
+
+// ---- デモ用グループデータ ----
+let demoEvaluationGroups: EvaluationGroup[] = [
+  { id: 'group-1', name: 'Aグループ', group_type: 'custom', created_by: 'staff-1', created_at: '2026-01-01T00:00:00Z' },
+]
+let demoEvaluationGroupMembers: EvaluationGroupMember[] = [
+  { id: 'gm-1', group_id: 'group-1', user_id: 'player-1', created_at: '2026-01-01T00:00:00Z' },
+  { id: 'gm-2', group_id: 'group-1', user_id: 'player-2', created_at: '2026-01-01T00:00:00Z' },
+  { id: 'gm-3', group_id: 'group-1', user_id: 'player-3', created_at: '2026-01-01T00:00:00Z' },
+]
+
 let demoSscPlans: SscPlan[] = []
 
 // ---- アンケート配信管理（コーチ専用） ----
@@ -1808,8 +1819,23 @@ export async function deliverEvaluationTasks(
     }
     demoEvaluationDeliveries.push(delivery)
 
-    // 各選手に自己評価タスクを生成する
     const playerIds = players.map(p => p.id)
+
+    // グループ設定からタスク生成対象ペアを収集する（N×(N-1)）
+    const peerPairs = new Set<string>() // "evaluatorId::targetId" の重複排除用
+    for (const group of demoEvaluationGroups) {
+      const members = demoEvaluationGroupMembers
+        .filter(m => m.group_id === group.id && playerIds.includes(m.user_id))
+        .map(m => m.user_id)
+      for (const evaluatorId of members) {
+        for (const targetId of members) {
+          if (evaluatorId !== targetId) {
+            peerPairs.add(`${evaluatorId}::${targetId}`)
+          }
+        }
+      }
+    }
+
     for (const player of players) {
       // 自己評価タスク
       demoEvaluationTasks.push({
@@ -1822,30 +1848,20 @@ export async function deliverEvaluationTasks(
         completed_at: null,
         created_at: now,
       })
-      // ペア設定に基づく他者評価タスクを生成する
-      const pairs = demoEvaluationPairs.filter(
-        p => p.player_a_id === player.id || p.player_b_id === player.id
-      )
-      for (const pair of pairs) {
-        const targetId = pair.player_a_id === player.id ? pair.player_b_id : pair.player_a_id
-        if (!playerIds.includes(targetId)) continue
-        // 重複チェック
-        const exists = demoEvaluationTasks.some(
-          t => t.delivery_id === deliveryId && t.evaluator_id === player.id && t.target_id === targetId
-        )
-        if (!exists) {
-          demoEvaluationTasks.push({
-            id: `task-peer-${deliveryId}-${player.id}-${targetId}`,
-            delivery_id: deliveryId,
-            evaluator_id: player.id,
-            target_id: targetId,
-            status: 'pending',
-            delivered_at: now,
-            completed_at: null,
-            created_at: now,
-          })
-        }
-      }
+    }
+    // グループ由来の他者評価タスク
+    for (const key of Array.from(peerPairs)) {
+      const [evaluatorId, targetId] = key.split('::')
+      demoEvaluationTasks.push({
+        id: `task-peer-${deliveryId}-${evaluatorId}-${targetId}`,
+        delivery_id: deliveryId,
+        evaluator_id: evaluatorId,
+        target_id: targetId,
+        status: 'pending',
+        delivered_at: now,
+        completed_at: null,
+        created_at: now,
+      })
     }
     return delivery
   }
@@ -1868,16 +1884,22 @@ export async function deliverEvaluationTasks(
   // DB が自動生成した UUID を使用する
   const actualDeliveryId: string = delivery.id
 
-  // 2. ペア設定を取得する
-  const { data: pairs } = await supabase.from('evaluation_pairs').select('*')
-  const pairList: EvaluationPair[] = pairs || []
+  // 2. グループ設定を取得する（evaluation_groups + evaluation_group_members）
+  const { data: groupRows } = await supabase.from('evaluation_groups').select('id')
+  const groupIds: string[] = (groupRows || []).map((g: { id: string }) => g.id)
 
-  // 3. タスクを生成する
-  //    id フィールドは渡さず、DB側の DEFAULT gen_random_uuid() に自動採番させる
+  const { data: memberRows } = await supabase
+    .from('evaluation_group_members')
+    .select('group_id, user_id')
+    .in('group_id', groupIds.length > 0 ? groupIds : ['__none__'])
+  const memberList: { group_id: string; user_id: string }[] = memberRows || []
+
+  // 3. タスクを生成する（id は DB 自動採番）
   const tasks: Omit<EvaluationTask, 'id'>[] = []
   const playerIds = players.map(p => p.id)
+
+  // 自己評価タスク
   for (const player of players) {
-    // 自己評価
     tasks.push({
       delivery_id: actualDeliveryId,
       evaluator_id: player.id,
@@ -1887,24 +1909,35 @@ export async function deliverEvaluationTasks(
       completed_at: null,
       created_at: now,
     })
-    // ペア他者評価
-    const myPairs = pairList.filter(
-      p => p.player_a_id === player.id || p.player_b_id === player.id
-    )
-    for (const pair of myPairs) {
-      const targetId = pair.player_a_id === player.id ? pair.player_b_id : pair.player_a_id
-      if (!playerIds.includes(targetId)) continue
-      tasks.push({
-        delivery_id: actualDeliveryId,
-        evaluator_id: player.id,
-        target_id: targetId,
-        status: 'pending',
-        delivered_at: now,
-        completed_at: null,
-        created_at: now,
-      })
+  }
+
+  // グループ由来の他者評価タスク（N×(N-1)、重複排除）
+  const peerPairs = new Set<string>()
+  for (const groupId of groupIds) {
+    const members = memberList
+      .filter(m => m.group_id === groupId && playerIds.includes(m.user_id))
+      .map(m => m.user_id)
+    for (const evaluatorId of members) {
+      for (const targetId of members) {
+        if (evaluatorId !== targetId) {
+          peerPairs.add(`${evaluatorId}::${targetId}`)
+        }
+      }
     }
   }
+  for (const key of Array.from(peerPairs)) {
+    const [evaluatorId, targetId] = key.split('::')
+    tasks.push({
+      delivery_id: actualDeliveryId,
+      evaluator_id: evaluatorId,
+      target_id: targetId,
+      status: 'pending',
+      delivered_at: now,
+      completed_at: null,
+      created_at: now,
+    })
+  }
+
   if (tasks.length > 0) {
     const { error: tErr } = await supabase.from('evaluation_tasks').insert(tasks)
     if (tErr) {
@@ -2038,6 +2071,122 @@ export async function submitEvaluationAnswers(
     console.error('[data] submitEvaluationAnswers() タスク更新エラー:', taskErr.message)
     throw taskErr
   }
+}
+
+/**
+ * 選手の成長推移データを配信単位で取得する。
+ * 各配信の自己評価合計点・他者評価平均合計点を時系列で返す。
+ * @param playerId 対象選手のuser_id
+ */
+export async function getEvaluationHistoryForPlayer(
+  playerId: string
+): Promise<{
+  deliveryId: string
+  label: string
+  deliveredAt: string
+  selfTotal: number | null       // 自己評価の全問合計（最大150点）
+  othersTotal: number | null     // 他者評価の平均合計（最大150点）
+}[]> {
+  if (!isSupabaseConfigured()) {
+    // デモ: demoEvaluationDeliveries × demoEvaluationAnswers で算出
+    return demoEvaluationDeliveries
+      .slice()
+      .sort((a, b) => a.delivered_at.localeCompare(b.delivered_at))
+      .map(delivery => {
+        const taskIds = demoEvaluationTasks
+          .filter(t => t.delivery_id === delivery.id)
+          .map(t => t.id)
+        const allAns = demoEvaluationAnswers.filter(
+          a => a.target_id === playerId && taskIds.includes(a.task_id)
+        )
+        const selfAns = allAns.filter(a => a.evaluator_id === playerId)
+        const othersAns = allAns.filter(a => a.evaluator_id !== playerId)
+
+        const selfTotal = selfAns.length === 30
+          ? selfAns.reduce((s, a) => s + a.score, 0)
+          : null
+
+        let othersTotal: number | null = null
+        if (othersAns.length > 0) {
+          // 評価者別に合計を出して平均を取る
+          const evaluatorIds = Array.from(new Set(othersAns.map(a => a.evaluator_id)))
+          const totals = evaluatorIds.map(eid => {
+            const byEval = othersAns.filter(a => a.evaluator_id === eid)
+            return byEval.length === 30 ? byEval.reduce((s, a) => s + a.score, 0) : null
+          }).filter((v): v is number => v !== null)
+          if (totals.length > 0) {
+            othersTotal = Math.round(totals.reduce((s, v) => s + v, 0) / totals.length * 10) / 10
+          }
+        }
+
+        return {
+          deliveryId: delivery.id,
+          label: delivery.label,
+          deliveredAt: delivery.delivered_at,
+          selfTotal,
+          othersTotal,
+        }
+      })
+      .filter(d => d.selfTotal !== null || d.othersTotal !== null)
+  }
+
+  // Supabase: delivery 一覧取得 → 各deliveryのtask/answerを集約
+  const supabase = getSupabase()
+  const { data: deliveries, error: dErr } = await supabase
+    .from('evaluation_deliveries')
+    .select('id, label, delivered_at')
+    .order('delivered_at', { ascending: true })
+  if (dErr || !deliveries || deliveries.length === 0) return []
+
+  // 該当選手のタスク+回答を一括取得
+  const { data: tasks } = await supabase
+    .from('evaluation_tasks')
+    .select('id, delivery_id, evaluator_id')
+    .eq('target_id', playerId)
+    .eq('status', 'completed')
+  const taskList: { id: string; delivery_id: string; evaluator_id: string }[] = tasks || []
+  if (taskList.length === 0) return []
+
+  const { data: answers } = await supabase
+    .from('evaluation_answers')
+    .select('task_id, evaluator_id, score')
+    .eq('target_id', playerId)
+    .in('task_id', taskList.map(t => t.id))
+  const answerList: { task_id: string; evaluator_id: string; score: number }[] = answers || []
+
+  return deliveries.map((delivery: { id: string; label: string; delivered_at: string }) => {
+    const deliveryTaskIds = taskList
+      .filter(t => t.delivery_id === delivery.id)
+      .map(t => t.id)
+    const deliveryAnswers = answerList.filter(a => deliveryTaskIds.includes(a.task_id))
+
+    const selfAns = deliveryAnswers.filter(a => a.evaluator_id === playerId)
+    const othersAns = deliveryAnswers.filter(a => a.evaluator_id !== playerId)
+
+    const selfTotal = selfAns.length === 30
+      ? selfAns.reduce((s, a) => s + a.score, 0)
+      : null
+
+    let othersTotal: number | null = null
+    if (othersAns.length > 0) {
+      const evaluatorIds = Array.from(new Set(othersAns.map(a => a.evaluator_id)))
+      const totals = evaluatorIds.map(eid => {
+        const byEval = othersAns.filter(a => a.evaluator_id === eid)
+        return byEval.length === 30 ? byEval.reduce((s, a) => s + a.score, 0) : null
+      }).filter((v): v is number => v !== null)
+      if (totals.length > 0) {
+        othersTotal = Math.round(totals.reduce((s, v) => s + v, 0) / totals.length * 10) / 10
+      }
+    }
+
+    return {
+      deliveryId: delivery.id,
+      label: delivery.label,
+      deliveredAt: delivery.delivered_at,
+      selfTotal,
+      othersTotal,
+    }
+  }).filter(d => d.selfTotal !== null || d.othersTotal !== null)
 }
 
 /**
@@ -2176,6 +2325,206 @@ export async function deleteEvaluationPair(pairId: string): Promise<void> {
     .eq('id', pairId)
   if (error) {
     console.error('[data] deleteEvaluationPair() でエラーが発生しました:', error.message)
+    throw error
+  }
+}
+
+// ---- 他者評価グループ管理（コーチ専用） ----
+
+/**
+ * 全グループをメンバー情報付きで取得する。
+ */
+export async function getEvaluationGroups(): Promise<(EvaluationGroup & { members: EvaluationGroupMember[] })[]> {
+  if (!isSupabaseConfigured()) {
+    return demoEvaluationGroups.map(g => ({
+      ...g,
+      members: demoEvaluationGroupMembers
+        .filter(m => m.group_id === g.id)
+        .map(m => ({
+          ...m,
+          users: DEMO_USERS.find(u => u.id === m.user_id)
+            ? { id: m.user_id, name: DEMO_USERS.find(u => u.id === m.user_id)!.name, position: DEMO_USERS.find(u => u.id === m.user_id)!.position ?? null }
+            : undefined,
+        })),
+    }))
+  }
+  const supabase = getSupabase()
+  const { data: groups, error: gErr } = await supabase
+    .from('evaluation_groups')
+    .select('*')
+    .order('created_at')
+  if (gErr) {
+    console.error('[data] getEvaluationGroups() でエラーが発生しました:', gErr.message)
+    return []
+  }
+  const groupList: EvaluationGroup[] = groups || []
+  if (groupList.length === 0) return []
+
+  const { data: members, error: mErr } = await supabase
+    .from('evaluation_group_members')
+    .select('*, users(id, name, position)')
+    .in('group_id', groupList.map(g => g.id))
+  if (mErr) {
+    console.error('[data] getEvaluationGroups() メンバー取得エラー:', mErr.message)
+  }
+  const memberList: EvaluationGroupMember[] = members || []
+
+  return groupList.map(g => ({
+    ...g,
+    members: memberList.filter(m => m.group_id === g.id),
+  }))
+}
+
+/**
+ * グループを新規作成する。
+ */
+export async function addEvaluationGroup(
+  name: string,
+  groupType: string,
+  createdBy: string,
+): Promise<EvaluationGroup> {
+  const now = new Date().toISOString()
+  if (!isSupabaseConfigured()) {
+    const group: EvaluationGroup = {
+      id: `group-${Date.now()}`,
+      name,
+      group_type: groupType,
+      created_by: createdBy,
+      created_at: now,
+    }
+    demoEvaluationGroups.push(group)
+    return group
+  }
+  const { data, error } = await getSupabase()
+    .from('evaluation_groups')
+    .insert({ name, group_type: groupType, created_by: createdBy })
+    .select()
+    .single()
+  if (error) {
+    console.error('[data] addEvaluationGroup() でエラーが発生しました:', error.message)
+    throw error
+  }
+  return data
+}
+
+/**
+ * グループ名・種別を更新する。
+ */
+export async function updateEvaluationGroup(
+  groupId: string,
+  name: string,
+  groupType?: string,
+): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    const g = demoEvaluationGroups.find(x => x.id === groupId)
+    if (g) {
+      g.name = name
+      if (groupType !== undefined) g.group_type = groupType
+    }
+    return
+  }
+  const patch: Record<string, string> = { name }
+  if (groupType !== undefined) patch.group_type = groupType
+  const { error } = await getSupabase()
+    .from('evaluation_groups')
+    .update(patch)
+    .eq('id', groupId)
+  if (error) {
+    console.error('[data] updateEvaluationGroup() でエラーが発生しました:', error.message)
+    throw error
+  }
+}
+
+/**
+ * 配信名（label）を更新する。既存の回答・タスクデータは一切変更しない。
+ */
+export async function updateEvaluationDelivery(
+  deliveryId: string,
+  label: string,
+): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    const d = demoEvaluationDeliveries.find(x => x.id === deliveryId)
+    if (d) d.label = label
+    return
+  }
+  const { error } = await getSupabase()
+    .from('evaluation_deliveries')
+    .update({ label })
+    .eq('id', deliveryId)
+  if (error) {
+    console.error('[data] updateEvaluationDelivery() でエラーが発生しました:', error.message)
+    throw error
+  }
+}
+
+/**
+ * グループをメンバーごと削除する。
+ */
+export async function deleteEvaluationGroup(groupId: string): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    demoEvaluationGroups = demoEvaluationGroups.filter(g => g.id !== groupId)
+    demoEvaluationGroupMembers = demoEvaluationGroupMembers.filter(m => m.group_id !== groupId)
+    return
+  }
+  // メンバーは ON DELETE CASCADE で自動削除される
+  const { error } = await getSupabase()
+    .from('evaluation_groups')
+    .delete()
+    .eq('id', groupId)
+  if (error) {
+    console.error('[data] deleteEvaluationGroup() でエラーが発生しました:', error.message)
+    throw error
+  }
+}
+
+/**
+ * グループにメンバーを追加する。
+ */
+export async function addEvaluationGroupMember(
+  groupId: string,
+  userId: string,
+): Promise<EvaluationGroupMember> {
+  const now = new Date().toISOString()
+  if (!isSupabaseConfigured()) {
+    const member: EvaluationGroupMember = {
+      id: `gm-${Date.now()}`,
+      group_id: groupId,
+      user_id: userId,
+      created_at: now,
+      users: (() => {
+        const u = DEMO_USERS.find(x => x.id === userId)
+        return u ? { id: u.id, name: u.name, position: u.position ?? null } : undefined
+      })(),
+    }
+    demoEvaluationGroupMembers.push(member)
+    return member
+  }
+  const { data, error } = await getSupabase()
+    .from('evaluation_group_members')
+    .insert({ group_id: groupId, user_id: userId })
+    .select('*, users(id, name, position)')
+    .single()
+  if (error) {
+    console.error('[data] addEvaluationGroupMember() でエラーが発生しました:', error.message)
+    throw error
+  }
+  return data
+}
+
+/**
+ * グループからメンバーを削除する。
+ */
+export async function removeEvaluationGroupMember(memberId: string): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    demoEvaluationGroupMembers = demoEvaluationGroupMembers.filter(m => m.id !== memberId)
+    return
+  }
+  const { error } = await getSupabase()
+    .from('evaluation_group_members')
+    .delete()
+    .eq('id', memberId)
+  if (error) {
+    console.error('[data] removeEvaluationGroupMember() でエラーが発生しました:', error.message)
     throw error
   }
 }

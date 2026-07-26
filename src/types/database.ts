@@ -263,6 +263,7 @@ export interface EvaluationDelivery {
 /**
  * ペア設定（姉妹ペア・評価ペアのマスタデータ）。
  * 評価タスク自動アサイン時に参照する。
+ * @deprecated evaluation_groups / evaluation_group_members に移行済み。後方互換のため残存。
  */
 export interface EvaluationPair {
   id: string
@@ -271,6 +272,33 @@ export interface EvaluationPair {
   player_a_id: string
   player_b_id: string
   created_at: string
+}
+
+/**
+ * 他者評価グループ（複数名が互いに評価し合うグループ）。
+ * グループ内の全メンバーが他の全メンバーを評価する（N×(N-1)タスク生成）。
+ */
+export interface EvaluationGroup {
+  id: string
+  /** グループ名（例: "Aグループ" / "シスターペア1"） */
+  name: string
+  /** グループ種別（任意ラベル。例: "sister" / "position" / "custom"） */
+  group_type: string
+  created_by: string
+  created_at: string
+}
+
+/**
+ * 他者評価グループのメンバー。
+ * EvaluationGroup と users の中間テーブル。
+ */
+export interface EvaluationGroupMember {
+  id: string
+  group_id: string
+  user_id: string
+  created_at: string
+  // joined
+  users?: { id: string; name: string; position?: string | null }
 }
 
 /**
