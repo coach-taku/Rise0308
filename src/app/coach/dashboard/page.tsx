@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { User, DailyRecord, DailyRecordWithUser, Tournament, PhysicalRecord, MaxTrainingRecord, PracticeSession, GoalUpdatePhase, EvaluationDelivery, EvaluationAnswer, EvaluationGroup, EvaluationGroupMember } from '@/types/database'
-import { getUsers, getAllDailyRecords, getActiveTournament, addComment, updateComment, getTeamConditionRecords, getAllPhysicalRecords, getAllMaxTrainingRecords, getPracticeSession, getPracticeSessions, upsertPracticeSession, getMindsetScores, getActiveGoalUpdatePhase, startGoalUpdatePhase, endGoalUpdatePhase, getEvaluationDeliveries, deliverEvaluationTasks, getAllEvaluationAnswers, getEvaluationGroups, addEvaluationGroup, deleteEvaluationGroup, addEvaluationGroupMember, removeEvaluationGroupMember, EVALUATION_CATEGORIES, calcCategoryScores } from '@/lib/data'
+import { getUsers, getAllDailyRecords, getActiveTournament, addComment, updateComment, getTeamConditionRecords, getAllPhysicalRecords, getAllMaxTrainingRecords, getPracticeSession, getPracticeSessions, upsertPracticeSession, getMindsetScores, getActiveGoalUpdatePhase, startGoalUpdatePhase, endGoalUpdatePhase, getEvaluationDeliveries, deliverEvaluationTasks, getAllEvaluationAnswers, getEvaluationGroups, addEvaluationGroup, updateEvaluationGroup, deleteEvaluationGroup, addEvaluationGroupMember, removeEvaluationGroupMember, updateEvaluationDelivery, EVALUATION_CATEGORIES, calcCategoryScores } from '@/lib/data'
 import { getSession } from '@/lib/session'
 import Header from '@/components/Header'
 import BottomNav from '@/components/BottomNav'
@@ -175,6 +175,19 @@ export default function CoachDashboard() {
   const [groupFeedback, setGroupFeedback] = useState<string | null>(null)
   const [deletingGroupId, setDeletingGroupId] = useState<string | null>(null)
   const [removingMemberId, setRemovingMemberId] = useState<string | null>(null)
+
+  // ---- グループ編集モーダル ----
+  const [showEditGroupModal, setShowEditGroupModal] = useState(false)
+  const [editGroupId, setEditGroupId] = useState<string | null>(null)
+  const [editGroupName, setEditGroupName] = useState('')
+  const [editGroupType, setEditGroupType] = useState('custom')
+  const [editGroupSaving, setEditGroupSaving] = useState(false)
+
+  // ---- 配信名編集モーダル ----
+  const [showEditDeliveryModal, setShowEditDeliveryModal] = useState(false)
+  const [editDeliveryId, setEditDeliveryId] = useState<string | null>(null)
+  const [editDeliveryLabel, setEditDeliveryLabel] = useState('')
+  const [editDeliverySaving, setEditDeliverySaving] = useState(false)
 
   useEffect(() => {
     const session = getSession()
@@ -560,6 +573,65 @@ export default function CoachDashboard() {
       console.error('[coach] グループ取得エラー:', e)
     } finally {
       setGroupsLoading(false)
+    }
+  }
+
+  // ---- グループ編集モーダルを開く ----
+  const openEditGroupModal = (group: GroupWithMembers) => {
+    setEditGroupId(group.id)
+    setEditGroupName(group.name)
+    setEditGroupType(group.group_type || 'custom')
+    setShowEditGroupModal(true)
+  }
+
+  // ---- グループ名・種別を保存する ----
+  const handleSaveEditGroup = async () => {
+    if (!editGroupId || !editGroupName.trim()) return
+    setEditGroupSaving(true)
+    try {
+      await updateEvaluationGroup(editGroupId, editGroupName.trim(), editGroupType)
+      setEvaluationGroups(prev =>
+        prev.map(g =>
+          g.id === editGroupId
+            ? { ...g, name: editGroupName.trim(), group_type: editGroupType }
+            : g
+        )
+      )
+      setShowEditGroupModal(false)
+      setGroupFeedback('group-updated')
+      setTimeout(() => setGroupFeedback(null), 3000)
+    } catch (e) {
+      console.error('[coach] グループ更新エラー:', e)
+      alert('更新に失敗しました。再度お試しください。')
+    } finally {
+      setEditGroupSaving(false)
+    }
+  }
+
+  // ---- 配信名編集モーダルを開く ----
+  const openEditDeliveryModal = (delivery: EvaluationDelivery) => {
+    setEditDeliveryId(delivery.id)
+    setEditDeliveryLabel(delivery.label)
+    setShowEditDeliveryModal(true)
+  }
+
+  // ---- 配信名を保存する（回答・タスクは変更しない） ----
+  const handleSaveEditDelivery = async () => {
+    if (!editDeliveryId || !editDeliveryLabel.trim()) return
+    setEditDeliverySaving(true)
+    try {
+      await updateEvaluationDelivery(editDeliveryId, editDeliveryLabel.trim())
+      setEvaluationDeliveries(prev =>
+        prev.map(d =>
+          d.id === editDeliveryId ? { ...d, label: editDeliveryLabel.trim() } : d
+        )
+      )
+      setShowEditDeliveryModal(false)
+    } catch (e) {
+      console.error('[coach] 配信名更新エラー:', e)
+      alert('更新に失敗しました。再度お試しください。')
+    } finally {
+      setEditDeliverySaving(false)
     }
   }
 
@@ -1643,6 +1715,11 @@ export default function CoachDashboard() {
                   ✅ グループを作成しました
                 </div>
               )}
+              {groupFeedback === 'group-updated' && (
+                <div className="mb-3 bg-green-50 border border-green-200 rounded-xl px-3 py-2 text-xs text-green-700 font-bold">
+                  ✅ グループ情報を更新しました
+                </div>
+              )}
               {groupFeedback === 'member-added' && (
                 <div className="mb-3 bg-green-50 border border-green-200 rounded-xl px-3 py-2 text-xs text-green-700 font-bold">
                   ✅ メンバーを追加しました
@@ -1703,11 +1780,17 @@ export default function CoachDashboard() {
                               ＋ メンバー追加
                             </button>
                             <button
+                              onClick={() => openEditGroupModal(group)}
+                              className="text-xs text-gray-500 hover:text-gray-800 hover:bg-gray-200 px-2 py-1 rounded-lg transition-colors"
+                            >
+                              ✏️ 修正
+                            </button>
+                            <button
                               onClick={() => handleDeleteGroup(group.id)}
                               disabled={deletingGroupId === group.id}
                               className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
                             >
-                              {deletingGroupId === group.id ? '削除中...' : 'グループ削除'}
+                              {deletingGroupId === group.id ? '削除中...' : '削除'}
                             </button>
                           </div>
                         </div>
@@ -1811,17 +1894,27 @@ export default function CoachDashboard() {
                 <h3 className="text-sm font-bold text-gray-700 mb-3">配信履歴</h3>
                 <div className="flex flex-wrap gap-2">
                   {evaluationDeliveries.map((d: EvaluationDelivery) => (
-                    <button
-                      key={d.id}
-                      onClick={() => setSelectedDeliveryId(d.id)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                        selectedDeliveryId === d.id
-                          ? 'bg-brand-main text-brand-dark shadow-md'
-                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                      }`}
-                    >
-                      {d.label}
-                    </button>
+                    <div key={d.id} className="flex items-center gap-1">
+                      <button
+                        onClick={() => setSelectedDeliveryId(d.id)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                          selectedDeliveryId === d.id
+                            ? 'bg-brand-main text-brand-dark shadow-md'
+                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        }`}
+                      >
+                        {d.label}
+                      </button>
+                      <button
+                        onClick={() => openEditDeliveryModal(d)}
+                        className="text-gray-400 hover:text-gray-600 hover:bg-gray-100 p-1 rounded-lg transition-colors"
+                        title="配信名を修正"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3" viewBox="0 0 20 20" fill="currentColor">
+                          <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
+                        </svg>
+                      </button>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -2104,6 +2197,129 @@ export default function CoachDashboard() {
                       }`}
                     >
                       {groupSaving ? '作成中...' : '作成する'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ---- グループ編集モーダル ---- */}
+            {showEditGroupModal && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
+                <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl">
+                  <h3 className="text-lg font-bold text-brand-dark mb-1">✏️ グループを修正</h3>
+                  <p className="text-xs text-gray-500 mb-5">
+                    グループ名・種別を変更できます。メンバー設定は変わりません。
+                  </p>
+
+                  {/* グループ名 */}
+                  <div className="mb-4">
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      グループ名 <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={editGroupName}
+                      onChange={e => setEditGroupName(e.target.value)}
+                      placeholder="例: Aグループ、シスターグループ1"
+                      className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-brand-main focus:outline-none text-sm"
+                      onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) handleSaveEditGroup() }}
+                    />
+                  </div>
+
+                  {/* グループ種別 */}
+                  <div className="mb-5">
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      種別 <span className="text-gray-400 font-normal">（任意）</span>
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        { value: 'custom', label: 'カスタム' },
+                        { value: 'sister', label: 'シスター' },
+                        { value: 'position', label: '同ポジ' },
+                        { value: 'team', label: 'チーム全体' },
+                      ].map(opt => (
+                        <button
+                          key={opt.value}
+                          onClick={() => setEditGroupType(opt.value)}
+                          className={`px-3 py-2 rounded-xl text-xs font-medium border-2 transition-all ${
+                            editGroupType === opt.value
+                              ? 'border-brand-main bg-yellow-50 text-brand-dark'
+                              : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => { setShowEditGroupModal(false); setEditGroupId(null) }}
+                      className="flex-1 py-2.5 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+                    >
+                      キャンセル
+                    </button>
+                    <button
+                      onClick={handleSaveEditGroup}
+                      disabled={editGroupSaving || !editGroupName.trim()}
+                      className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${
+                        editGroupSaving || !editGroupName.trim()
+                          ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                          : 'bg-brand-main text-brand-dark hover:bg-yellow-400 shadow-md'
+                      }`}
+                    >
+                      {editGroupSaving ? '保存中...' : '保存する'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ---- 配信名編集モーダル ---- */}
+            {showEditDeliveryModal && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
+                <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl">
+                  <h3 className="text-lg font-bold text-brand-dark mb-1">✏️ 配信名を修正</h3>
+                  <p className="text-xs text-gray-500 mb-1">
+                    配信名（ラベル）のみ変更します。
+                  </p>
+                  <p className="text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 mb-5">
+                    ⚠️ 回答データ・タスクは一切変更されません。名前だけが変わります。
+                  </p>
+
+                  <div className="mb-5">
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      配信名 <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={editDeliveryLabel}
+                      onChange={e => setEditDeliveryLabel(e.target.value)}
+                      placeholder="例: 2026年7月 前期評価"
+                      className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-brand-main focus:outline-none text-sm"
+                      onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) handleSaveEditDelivery() }}
+                    />
+                  </div>
+
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => { setShowEditDeliveryModal(false); setEditDeliveryId(null) }}
+                      className="flex-1 py-2.5 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+                    >
+                      キャンセル
+                    </button>
+                    <button
+                      onClick={handleSaveEditDelivery}
+                      disabled={editDeliverySaving || !editDeliveryLabel.trim()}
+                      className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${
+                        editDeliverySaving || !editDeliveryLabel.trim()
+                          ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                          : 'bg-brand-main text-brand-dark hover:bg-yellow-400 shadow-md'
+                      }`}
+                    >
+                      {editDeliverySaving ? '保存中...' : '保存する'}
                     </button>
                   </div>
                 </div>

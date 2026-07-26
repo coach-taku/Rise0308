@@ -2408,23 +2408,51 @@ export async function addEvaluationGroup(
 }
 
 /**
- * グループ名を更新する。
+ * グループ名・種別を更新する。
  */
 export async function updateEvaluationGroup(
   groupId: string,
   name: string,
+  groupType?: string,
 ): Promise<void> {
   if (!isSupabaseConfigured()) {
     const g = demoEvaluationGroups.find(x => x.id === groupId)
-    if (g) g.name = name
+    if (g) {
+      g.name = name
+      if (groupType !== undefined) g.group_type = groupType
+    }
     return
   }
+  const patch: Record<string, string> = { name }
+  if (groupType !== undefined) patch.group_type = groupType
   const { error } = await getSupabase()
     .from('evaluation_groups')
-    .update({ name })
+    .update(patch)
     .eq('id', groupId)
   if (error) {
     console.error('[data] updateEvaluationGroup() でエラーが発生しました:', error.message)
+    throw error
+  }
+}
+
+/**
+ * 配信名（label）を更新する。既存の回答・タスクデータは一切変更しない。
+ */
+export async function updateEvaluationDelivery(
+  deliveryId: string,
+  label: string,
+): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    const d = demoEvaluationDeliveries.find(x => x.id === deliveryId)
+    if (d) d.label = label
+    return
+  }
+  const { error } = await getSupabase()
+    .from('evaluation_deliveries')
+    .update({ label })
+    .eq('id', deliveryId)
+  if (error) {
+    console.error('[data] updateEvaluationDelivery() でエラーが発生しました:', error.message)
     throw error
   }
 }
