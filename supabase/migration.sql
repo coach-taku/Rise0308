@@ -358,3 +358,32 @@ CREATE TABLE IF NOT EXISTS ssc_plans (
   UNIQUE (user_id, delivery_id)
 );
 ALTER TABLE ssc_plans DISABLE ROW LEVEL SECURITY;
+
+-- ============================================================
+-- 13. 他者評価グループ機能（2026-07-26 追加）
+--     evaluation_pairs（2名ペア）をグループ（N名）に拡張。
+--     既存の evaluation_pairs テーブルは後方互換のため残存。
+--     すべて IF NOT EXISTS のため、再実行しても安全です。
+-- ============================================================
+
+-- 13-1. evaluation_groups（グループ管理）
+CREATE TABLE IF NOT EXISTS evaluation_groups (
+  id          uuid        DEFAULT gen_random_uuid() PRIMARY KEY,
+  name        text        NOT NULL,
+  group_type  text        NOT NULL DEFAULT 'custom',
+  created_by  uuid        REFERENCES users(id) ON DELETE SET NULL,
+  created_at  timestamptz DEFAULT now()
+);
+ALTER TABLE evaluation_groups DISABLE ROW LEVEL SECURITY;
+
+-- 13-2. evaluation_group_members（グループメンバー中間テーブル）
+CREATE TABLE IF NOT EXISTS evaluation_group_members (
+  id         uuid        DEFAULT gen_random_uuid() PRIMARY KEY,
+  group_id   uuid        NOT NULL REFERENCES evaluation_groups(id) ON DELETE CASCADE,
+  user_id    uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at timestamptz DEFAULT now(),
+  UNIQUE (group_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_eval_group_members_group  ON evaluation_group_members(group_id);
+CREATE INDEX IF NOT EXISTS idx_eval_group_members_user   ON evaluation_group_members(user_id);
+ALTER TABLE evaluation_group_members DISABLE ROW LEVEL SECURITY;

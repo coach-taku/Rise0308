@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { User, DailyRecord, DailyRecordWithUser, Tournament, PhysicalRecord, MaxTrainingRecord, PracticeSession, GoalUpdatePhase, EvaluationDelivery, EvaluationAnswer, EvaluationPair } from '@/types/database'
-import { getUsers, getAllDailyRecords, getActiveTournament, addComment, updateComment, getTeamConditionRecords, getAllPhysicalRecords, getAllMaxTrainingRecords, getPracticeSession, getPracticeSessions, upsertPracticeSession, getMindsetScores, getActiveGoalUpdatePhase, startGoalUpdatePhase, endGoalUpdatePhase, getEvaluationDeliveries, deliverEvaluationTasks, getAllEvaluationAnswers, getEvaluationPairs, addEvaluationPair, deleteEvaluationPair, EVALUATION_CATEGORIES, calcCategoryScores } from '@/lib/data'
+import { User, DailyRecord, DailyRecordWithUser, Tournament, PhysicalRecord, MaxTrainingRecord, PracticeSession, GoalUpdatePhase, EvaluationDelivery, EvaluationAnswer, EvaluationGroup, EvaluationGroupMember } from '@/types/database'
+import { getUsers, getAllDailyRecords, getActiveTournament, addComment, updateComment, getTeamConditionRecords, getAllPhysicalRecords, getAllMaxTrainingRecords, getPracticeSession, getPracticeSessions, upsertPracticeSession, getMindsetScores, getActiveGoalUpdatePhase, startGoalUpdatePhase, endGoalUpdatePhase, getEvaluationDeliveries, deliverEvaluationTasks, getAllEvaluationAnswers, getEvaluationGroups, addEvaluationGroup, deleteEvaluationGroup, addEvaluationGroupMember, removeEvaluationGroupMember, EVALUATION_CATEGORIES, calcCategoryScores } from '@/lib/data'
 import { getSession } from '@/lib/session'
 import Header from '@/components/Header'
 import BottomNav from '@/components/BottomNav'
@@ -157,16 +157,24 @@ export default function CoachDashboard() {
   const [deliveryLabel, setDeliveryLabel] = useState('')
   const [delivering, setDelivering] = useState(false)
   const [deliverFeedback, setDeliverFeedback] = useState(false)
-  // ペア設定
-  const [evaluationPairs, setEvaluationPairs] = useState<EvaluationPair[]>([])
-  const [pairsLoading, setPairsLoading] = useState(false)
-  const [showPairModal, setShowPairModal] = useState(false)
-  const [pairPlayerA, setPairPlayerA] = useState<string>('')
-  const [pairPlayerB, setPairPlayerB] = useState<string>('')
-  const [pairType, setPairType] = useState<string>('default')
-  const [pairSaving, setPairSaving] = useState(false)
-  const [pairFeedback, setPairFeedback] = useState<string | null>(null)
-  const [deletingPairId, setDeletingPairId] = useState<string | null>(null)
+  // グループ設定
+  type GroupWithMembers = EvaluationGroup & { members: EvaluationGroupMember[] }
+  const [evaluationGroups, setEvaluationGroups] = useState<GroupWithMembers[]>([])
+  const [groupsLoading, setGroupsLoading] = useState(false)
+  // グループ作成モーダル
+  const [showGroupModal, setShowGroupModal] = useState(false)
+  const [newGroupName, setNewGroupName] = useState('')
+  const [newGroupType, setNewGroupType] = useState('custom')
+  const [groupSaving, setGroupSaving] = useState(false)
+  // メンバー追加モーダル
+  const [showMemberModal, setShowMemberModal] = useState(false)
+  const [targetGroupId, setTargetGroupId] = useState<string | null>(null)
+  const [memberAddUserId, setMemberAddUserId] = useState<string>('')
+  const [memberSaving, setMemberSaving] = useState(false)
+  // フィードバック
+  const [groupFeedback, setGroupFeedback] = useState<string | null>(null)
+  const [deletingGroupId, setDeletingGroupId] = useState<string | null>(null)
+  const [removingMemberId, setRemovingMemberId] = useState<string | null>(null)
 
   useEffect(() => {
     const session = getSession()
@@ -403,12 +411,12 @@ export default function CoachDashboard() {
   const loadEvaluationData = async () => {
     setEvaluationLoading(true)
     try {
-      const [deliveries, pairs] = await Promise.all([
+      const [deliveries, groups] = await Promise.all([
         getEvaluationDeliveries(),
-        getEvaluationPairs(),
+        getEvaluationGroups(),
       ])
       setEvaluationDeliveries(deliveries)
-      setEvaluationPairs(pairs)
+      setEvaluationGroups(groups)
       // 最新の配信を自動選択する
       if (deliveries.length > 0 && !selectedDeliveryId) {
         const latestId = deliveries[0].id
@@ -459,64 +467,99 @@ export default function CoachDashboard() {
     }
   }
 
-  // ---- ペア追加処理 ----
-  const handleAddPair = async () => {
-    if (!pairPlayerA || !pairPlayerB || pairPlayerA === pairPlayerB) return
-    // 重複チェック
-    const alreadyExists = evaluationPairs.some(
-      p =>
-        (p.player_a_id === pairPlayerA && p.player_b_id === pairPlayerB) ||
-        (p.player_a_id === pairPlayerB && p.player_b_id === pairPlayerA)
-    )
-    if (alreadyExists) {
-      setPairFeedback('error-dup')
-      setTimeout(() => setPairFeedback(null), 3000)
-      return
-    }
-    setPairSaving(true)
+  // ---- グループ作成処理 ----
+  const handleAddGroup = async () => {
+    if (!user || !newGroupName.trim()) return
+    setGroupSaving(true)
     try {
-      const newPair = await addEvaluationPair(pairPlayerA, pairPlayerB, pairType || 'default')
-      setEvaluationPairs(prev => [...prev, newPair])
-      setPairPlayerA('')
-      setPairPlayerB('')
-      setPairType('default')
-      setShowPairModal(false)
-      setPairFeedback('success')
-      setTimeout(() => setPairFeedback(null), 3000)
+      const newGroup = await addEvaluationGroup(newGroupName.trim(), newGroupType, user.id)
+      setEvaluationGroups(prev => [...prev, { ...newGroup, members: [] }])
+      setNewGroupName('')
+      setNewGroupType('custom')
+      setShowGroupModal(false)
+      setGroupFeedback('group-created')
+      setTimeout(() => setGroupFeedback(null), 3000)
     } catch (e) {
-      console.error('[coach] ペア追加エラー:', e)
-      setPairFeedback('error')
-      setTimeout(() => setPairFeedback(null), 3000)
+      console.error('[coach] グループ作成エラー:', e)
+      alert('グループの作成に失敗しました。再度お試しください。')
     } finally {
-      setPairSaving(false)
+      setGroupSaving(false)
     }
   }
 
-  // ---- ペア削除処理 ----
-  const handleDeletePair = async (pairId: string) => {
-    if (!confirm('このペア設定を削除しますか？')) return
-    setDeletingPairId(pairId)
+  // ---- グループ削除処理 ----
+  const handleDeleteGroup = async (groupId: string) => {
+    if (!confirm('このグループを削除しますか？\nメンバー設定もすべて削除されます。')) return
+    setDeletingGroupId(groupId)
     try {
-      await deleteEvaluationPair(pairId)
-      setEvaluationPairs(prev => prev.filter(p => p.id !== pairId))
+      await deleteEvaluationGroup(groupId)
+      setEvaluationGroups(prev => prev.filter(g => g.id !== groupId))
     } catch (e) {
-      console.error('[coach] ペア削除エラー:', e)
+      console.error('[coach] グループ削除エラー:', e)
       alert('削除に失敗しました。再度お試しください。')
     } finally {
-      setDeletingPairId(null)
+      setDeletingGroupId(null)
     }
   }
 
-  // ---- ペア一覧再読み込み ----
-  const reloadPairs = async () => {
-    setPairsLoading(true)
+  // ---- メンバー追加処理 ----
+  const handleAddMember = async () => {
+    if (!targetGroupId || !memberAddUserId) return
+    const group = evaluationGroups.find(g => g.id === targetGroupId)
+    if (!group) return
+    // 重複チェック
+    if (group.members.some(m => m.user_id === memberAddUserId)) {
+      setGroupFeedback('error-dup-member')
+      setTimeout(() => setGroupFeedback(null), 3000)
+      return
+    }
+    setMemberSaving(true)
     try {
-      const pairs = await getEvaluationPairs()
-      setEvaluationPairs(pairs)
+      const newMember = await addEvaluationGroupMember(targetGroupId, memberAddUserId)
+      setEvaluationGroups(prev =>
+        prev.map(g =>
+          g.id === targetGroupId ? { ...g, members: [...g.members, newMember] } : g
+        )
+      )
+      setMemberAddUserId('')
+      setGroupFeedback('member-added')
+      setTimeout(() => setGroupFeedback(null), 3000)
     } catch (e) {
-      console.error('[coach] ペア取得エラー:', e)
+      console.error('[coach] メンバー追加エラー:', e)
+      alert('メンバーの追加に失敗しました。再度お試しください。')
     } finally {
-      setPairsLoading(false)
+      setMemberSaving(false)
+    }
+  }
+
+  // ---- メンバー削除処理 ----
+  const handleRemoveMember = async (memberId: string, groupId: string) => {
+    setRemovingMemberId(memberId)
+    try {
+      await removeEvaluationGroupMember(memberId)
+      setEvaluationGroups(prev =>
+        prev.map(g =>
+          g.id === groupId ? { ...g, members: g.members.filter(m => m.id !== memberId) } : g
+        )
+      )
+    } catch (e) {
+      console.error('[coach] メンバー削除エラー:', e)
+      alert('削除に失敗しました。再度お試しください。')
+    } finally {
+      setRemovingMemberId(null)
+    }
+  }
+
+  // ---- グループ一覧再読み込み ----
+  const reloadGroups = async () => {
+    setGroupsLoading(true)
+    try {
+      const groups = await getEvaluationGroups()
+      setEvaluationGroups(groups)
+    } catch (e) {
+      console.error('[coach] グループ取得エラー:', e)
+    } finally {
+      setGroupsLoading(false)
     }
   }
 
@@ -1567,87 +1610,178 @@ export default function CoachDashboard() {
               </div>
             )}
 
-            {/* ペア設定セクション */}
+            {/* グループ管理セクション */}
             <div className="bg-white rounded-2xl p-4 shadow-sm">
               <div className="flex items-center justify-between mb-3">
                 <div>
-                  <h3 className="text-sm font-bold text-gray-700">👥 他者評価ペア設定</h3>
+                  <h3 className="text-sm font-bold text-gray-700">👥 他者評価グループ設定</h3>
                   <p className="text-xs text-gray-500 mt-0.5">
-                    ペアを登録すると、配信時に互いの他者評価タスクが自動生成されます
+                    グループ内の全メンバーが互いに他者評価します（N人→N×(N-1)タスク自動生成）
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={reloadPairs}
-                    disabled={pairsLoading}
+                    onClick={reloadGroups}
+                    disabled={groupsLoading}
                     className="text-xs text-gray-400 hover:text-gray-600 transition-colors p-1.5 rounded-lg hover:bg-gray-100"
                     title="再読み込み"
                   >
                     🔄
                   </button>
                   <button
-                    onClick={() => { setPairPlayerA(''); setPairPlayerB(''); setPairType('default'); setShowPairModal(true) }}
+                    onClick={() => { setNewGroupName(''); setNewGroupType('custom'); setShowGroupModal(true) }}
                     className="bg-brand-main text-brand-dark font-bold px-4 py-2 rounded-xl hover:bg-yellow-400 transition-colors text-xs whitespace-nowrap shadow-md"
                   >
-                    ＋ ペアを追加
+                    ＋ グループを作成
                   </button>
                 </div>
               </div>
 
-              {/* ペア追加フィードバック */}
-              {pairFeedback === 'success' && (
+              {/* フィードバック */}
+              {groupFeedback === 'group-created' && (
                 <div className="mb-3 bg-green-50 border border-green-200 rounded-xl px-3 py-2 text-xs text-green-700 font-bold">
-                  ✅ ペアを追加しました
+                  ✅ グループを作成しました
                 </div>
               )}
-              {pairFeedback === 'error-dup' && (
+              {groupFeedback === 'member-added' && (
+                <div className="mb-3 bg-green-50 border border-green-200 rounded-xl px-3 py-2 text-xs text-green-700 font-bold">
+                  ✅ メンバーを追加しました
+                </div>
+              )}
+              {groupFeedback === 'error-dup-member' && (
                 <div className="mb-3 bg-orange-50 border border-orange-200 rounded-xl px-3 py-2 text-xs text-orange-700 font-bold">
-                  ⚠️ このペアはすでに登録されています
-                </div>
-              )}
-              {pairFeedback === 'error' && (
-                <div className="mb-3 bg-red-50 border border-red-200 rounded-xl px-3 py-2 text-xs text-red-700 font-bold">
-                  ❌ 追加に失敗しました。再度お試しください
+                  ⚠️ この選手はすでにグループに追加されています
                 </div>
               )}
 
-              {/* ペア一覧 */}
-              {pairsLoading ? (
+              {/* グループ一覧 */}
+              {groupsLoading ? (
                 <div className="text-center py-4 text-gray-400 text-xs">読み込み中...</div>
-              ) : evaluationPairs.length === 0 ? (
+              ) : evaluationGroups.length === 0 ? (
                 <div className="text-center py-6 text-gray-400 text-xs bg-gray-50 rounded-xl">
-                  <p className="text-2xl mb-1">👫</p>
-                  <p>ペアが登録されていません</p>
-                  <p className="mt-0.5">「＋ ペアを追加」からペアを登録してください</p>
+                  <p className="text-2xl mb-1">👥</p>
+                  <p>グループが登録されていません</p>
+                  <p className="mt-0.5">「＋ グループを作成」からグループを登録してください</p>
                 </div>
               ) : (
-                <div className="space-y-2">
-                  {evaluationPairs.map((pair: EvaluationPair) => {
-                    const playerA = allUsers.find(u => u.id === pair.player_a_id)
-                    const playerB = allUsers.find(u => u.id === pair.player_b_id)
-                    if (!playerA || !playerB) return null
+                <div className="space-y-3">
+                  {evaluationGroups.map(group => {
+                    const memberCount = group.members.length
+                    const taskCount = memberCount * (memberCount - 1)
+                    const isTarget = targetGroupId === group.id && showMemberModal
                     return (
-                      <div
-                        key={pair.id}
-                        className="flex items-center justify-between bg-gray-50 rounded-xl px-3 py-2.5"
-                      >
-                        <div className="flex items-center gap-2 flex-1 min-w-0">
-                          <span className="font-medium text-gray-800 text-sm truncate">{playerA.name}</span>
-                          <span className="text-gray-400 text-xs flex-shrink-0">⇄</span>
-                          <span className="font-medium text-gray-800 text-sm truncate">{playerB.name}</span>
-                          {pair.pair_type && pair.pair_type !== 'default' && (
-                            <span className="text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full flex-shrink-0">
-                              {pair.pair_type}
+                      <div key={group.id} className="border border-gray-200 rounded-xl overflow-hidden">
+                        {/* グループヘッダー */}
+                        <div className="flex items-center justify-between px-3 py-2.5 bg-gray-50">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="font-bold text-gray-800 text-sm truncate">{group.name}</span>
+                            {group.group_type && group.group_type !== 'custom' && (
+                              <span className="text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full flex-shrink-0">
+                                {group.group_type}
+                              </span>
+                            )}
+                            <span className="text-xs text-gray-400 flex-shrink-0">
+                              {memberCount}人
+                              {memberCount >= 2 && (
+                                <span className="ml-1 text-blue-500">→ {taskCount}タスク</span>
+                              )}
                             </span>
-                          )}
+                          </div>
+                          <div className="flex items-center gap-1.5 flex-shrink-0">
+                            <button
+                              onClick={() => {
+                                setTargetGroupId(group.id)
+                                setMemberAddUserId('')
+                                setShowMemberModal(true)
+                              }}
+                              className={`text-xs font-medium px-2.5 py-1 rounded-lg transition-colors ${
+                                isTarget
+                                  ? 'bg-brand-main text-brand-dark'
+                                  : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
+                              }`}
+                            >
+                              ＋ メンバー追加
+                            </button>
+                            <button
+                              onClick={() => handleDeleteGroup(group.id)}
+                              disabled={deletingGroupId === group.id}
+                              className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
+                            >
+                              {deletingGroupId === group.id ? '削除中...' : 'グループ削除'}
+                            </button>
+                          </div>
                         </div>
-                        <button
-                          onClick={() => handleDeletePair(pair.id)}
-                          disabled={deletingPairId === pair.id}
-                          className="flex-shrink-0 ml-2 text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
-                        >
-                          {deletingPairId === pair.id ? '削除中...' : '削除'}
-                        </button>
+
+                        {/* メンバー追加インライン（このグループが選択中の場合） */}
+                        {targetGroupId === group.id && showMemberModal && (
+                          <div className="px-3 py-2.5 bg-blue-50 border-t border-blue-100 flex items-center gap-2">
+                            <select
+                              value={memberAddUserId}
+                              onChange={e => setMemberAddUserId(e.target.value)}
+                              className="flex-1 px-3 py-2 rounded-xl border-2 border-blue-200 focus:border-brand-main focus:outline-none text-sm bg-white"
+                            >
+                              <option value="">選手を選択してください</option>
+                              {allUsers
+                                .filter(u => u.role === 'player' && !group.members.some(m => m.user_id === u.id))
+                                .map(u => (
+                                  <option key={u.id} value={u.id}>
+                                    {u.name}{u.position ? `（${u.position}）` : ''}
+                                  </option>
+                                ))}
+                            </select>
+                            <button
+                              onClick={handleAddMember}
+                              disabled={memberSaving || !memberAddUserId}
+                              className={`flex-shrink-0 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
+                                memberSaving || !memberAddUserId
+                                  ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                                  : 'bg-brand-main text-brand-dark hover:bg-yellow-400'
+                              }`}
+                            >
+                              {memberSaving ? '追加中...' : '追加'}
+                            </button>
+                            <button
+                              onClick={() => { setShowMemberModal(false); setTargetGroupId(null) }}
+                              className="flex-shrink-0 px-3 py-2 rounded-xl text-xs font-medium bg-white text-gray-500 hover:bg-gray-100 border border-gray-200"
+                            >
+                              閉じる
+                            </button>
+                          </div>
+                        )}
+
+                        {/* メンバー一覧 */}
+                        {group.members.length === 0 ? (
+                          <div className="px-3 py-3 text-center text-xs text-gray-400">
+                            メンバーがいません。「＋ メンバー追加」から追加してください。
+                          </div>
+                        ) : (
+                          <div className="divide-y divide-gray-100">
+                            {group.members.map((member, idx) => {
+                              const u = allUsers.find(x => x.id === member.user_id)
+                                || (member.users ? { ...member.users, role: 'player' as const, password: '' } : null)
+                              return (
+                                <div key={member.id} className="flex items-center justify-between px-3 py-2">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs text-gray-400 w-4">{idx + 1}</span>
+                                    <span className="text-sm text-gray-800">{u?.name ?? '不明'}</span>
+                                    {u && 'position' in u && u.position && (
+                                      <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">
+                                        {u.position}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <button
+                                    onClick={() => handleRemoveMember(member.id, group.id)}
+                                    disabled={removingMemberId === member.id}
+                                    className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
+                                  >
+                                    {removingMemberId === member.id ? '削除中...' : '外す'}
+                                  </button>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
                       </div>
                     )
                   })}
@@ -1864,11 +1998,16 @@ export default function CoachDashboard() {
                       }}
                     />
                   </div>
-                  {/* ペア設定サマリー */}
+                  {/* グループ設定サマリー */}
                   <div className="mb-4 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2.5 text-xs text-blue-700">
-                    👥 登録済みペア: <span className="font-bold">{evaluationPairs.length} 組</span>
-                    {evaluationPairs.length === 0 && (
-                      <span className="ml-1 text-orange-600">（ペア未登録のため自己評価タスクのみ生成されます）</span>
+                    👥 登録済みグループ: <span className="font-bold">{evaluationGroups.length} グループ</span>
+                    {evaluationGroups.length > 0 && (
+                      <span className="ml-1">
+                        （総メンバー: {evaluationGroups.reduce((s, g) => s + g.members.length, 0)}人）
+                      </span>
+                    )}
+                    {evaluationGroups.length === 0 && (
+                      <span className="ml-1 text-orange-600">（グループ未登録のため自己評価タスクのみ生成されます）</span>
                     )}
                   </div>
                   <p className="text-xs text-gray-400 mb-5 bg-yellow-50 border border-yellow-200 rounded-lg p-3">
@@ -1897,110 +2036,74 @@ export default function CoachDashboard() {
               </div>
             )}
 
-            {/* ペア追加モーダル */}
-            {showPairModal && (
+            {/* グループ作成モーダル */}
+            {showGroupModal && (
               <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
                 <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl">
-                  <h3 className="text-lg font-bold text-brand-dark mb-1">👥 他者評価ペアを追加</h3>
+                  <h3 className="text-lg font-bold text-brand-dark mb-1">👥 グループを作成</h3>
                   <p className="text-xs text-gray-500 mb-5">
-                    互いに他者評価し合う2人を選択してください。ペアは双方向に機能します。
+                    グループ名を入力してください。作成後にメンバーを追加できます。
                   </p>
 
-                  {/* 選手A */}
+                  {/* グループ名 */}
                   <div className="mb-4">
                     <label className="block text-sm font-semibold text-gray-700 mb-2">
-                      選手 A <span className="text-red-500">*</span>
+                      グループ名 <span className="text-red-500">*</span>
                     </label>
-                    <select
-                      value={pairPlayerA}
-                      onChange={e => setPairPlayerA(e.target.value)}
-                      className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-brand-main focus:outline-none text-sm bg-white"
-                    >
-                      <option value="">選択してください</option>
-                      {allUsers
-                        .filter(u => u.role === 'player')
-                        .map(u => (
-                          <option key={u.id} value={u.id} disabled={u.id === pairPlayerB}>
-                            {u.name}{u.position ? `（${u.position}）` : ''}
-                          </option>
-                        ))}
-                    </select>
+                    <input
+                      type="text"
+                      value={newGroupName}
+                      onChange={e => setNewGroupName(e.target.value)}
+                      placeholder="例: Aグループ、シスターグループ1"
+                      className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-brand-main focus:outline-none text-sm"
+                      onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) handleAddGroup() }}
+                    />
                   </div>
 
-                  {/* 選手B */}
-                  <div className="mb-4">
-                    <label className="block text-sm font-semibold text-gray-700 mb-2">
-                      選手 B <span className="text-red-500">*</span>
-                    </label>
-                    <select
-                      value={pairPlayerB}
-                      onChange={e => setPairPlayerB(e.target.value)}
-                      className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-brand-main focus:outline-none text-sm bg-white"
-                    >
-                      <option value="">選択してください</option>
-                      {allUsers
-                        .filter(u => u.role === 'player')
-                        .map(u => (
-                          <option key={u.id} value={u.id} disabled={u.id === pairPlayerA}>
-                            {u.name}{u.position ? `（${u.position}）` : ''}
-                          </option>
-                        ))}
-                    </select>
-                  </div>
-
-                  {/* ペア種別（任意） */}
+                  {/* グループ種別 */}
                   <div className="mb-5">
                     <label className="block text-sm font-semibold text-gray-700 mb-2">
-                      ペア種別 <span className="text-gray-400 font-normal">（任意）</span>
+                      種別 <span className="text-gray-400 font-normal">（任意）</span>
                     </label>
-                    <div className="flex gap-2">
-                      {['default', 'sister', 'position', 'captain'].map(type => (
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        { value: 'custom', label: 'カスタム' },
+                        { value: 'sister', label: 'シスター' },
+                        { value: 'position', label: '同ポジ' },
+                        { value: 'team', label: 'チーム全体' },
+                      ].map(opt => (
                         <button
-                          key={type}
-                          onClick={() => setPairType(type)}
-                          className={`flex-1 py-2 rounded-xl text-xs font-medium border-2 transition-all ${
-                            pairType === type
+                          key={opt.value}
+                          onClick={() => setNewGroupType(opt.value)}
+                          className={`px-3 py-2 rounded-xl text-xs font-medium border-2 transition-all ${
+                            newGroupType === opt.value
                               ? 'border-brand-main bg-yellow-50 text-brand-dark'
                               : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300'
                           }`}
                         >
-                          {type === 'default' ? '通常' : type === 'sister' ? 'シスター' : type === 'position' ? '同ポジ' : 'キャプテン'}
+                          {opt.label}
                         </button>
                       ))}
                     </div>
                   </div>
 
-                  {/* プレビュー */}
-                  {pairPlayerA && pairPlayerB && (
-                    <div className="mb-4 bg-gray-50 rounded-xl px-4 py-3 text-sm text-gray-600 text-center">
-                      <span className="font-bold text-gray-800">{allUsers.find(u => u.id === pairPlayerA)?.name}</span>
-                      <span className="mx-2 text-gray-400">⇄</span>
-                      <span className="font-bold text-gray-800">{allUsers.find(u => u.id === pairPlayerB)?.name}</span>
-                      {pairType !== 'default' && (
-                        <span className="ml-2 text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full">
-                          {pairType === 'sister' ? 'シスター' : pairType === 'position' ? '同ポジ' : 'キャプテン'}
-                        </span>
-                      )}
-                    </div>
-                  )}
-
                   <div className="flex gap-3">
                     <button
-                      onClick={() => { setShowPairModal(false); setPairPlayerA(''); setPairPlayerB(''); setPairType('default') }}
+                      onClick={() => { setShowGroupModal(false); setNewGroupName(''); setNewGroupType('custom') }}
                       className="flex-1 py-2.5 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
                     >
                       キャンセル
                     </button>
                     <button
-                      onClick={handleAddPair}
-                      disabled={pairSaving || !pairPlayerA || !pairPlayerB || pairPlayerA === pairPlayerB}
+                      onClick={handleAddGroup}
+                      disabled={groupSaving || !newGroupName.trim()}
                       className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${
-                        pairSaving || !pairPlayerA || !pairPlayerB || pairPlayerA === pairPlayerB
+                        groupSaving || !newGroupName.trim()
                           ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
                           : 'bg-brand-main text-brand-dark hover:bg-yellow-400 shadow-md'
                       }`}
                     >
-                      {pairSaving ? '追加中...' : '追加する'}
+                      {groupSaving ? '作成中...' : '作成する'}
                     </button>
                   </div>
                 </div>
