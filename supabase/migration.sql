@@ -422,3 +422,41 @@ CREATE TABLE IF NOT EXISTS notice_completions (
 CREATE INDEX IF NOT EXISTS idx_notice_completions_notice ON notice_completions(notice_id);
 CREATE INDEX IF NOT EXISTS idx_notice_completions_user   ON notice_completions(user_id);
 ALTER TABLE notice_completions DISABLE ROW LEVEL SECURITY;
+
+-- ============================================================
+-- 【2026-07-29 追加分（連絡事項・TODOリスト）の適用手順】
+--
+-- 既存の Supabase プロジェクトにこの機能を追加する場合は、
+-- Supabase SQL Editor に以下のSQLを貼り付けて実行してください。
+-- すべて IF NOT EXISTS のため、再実行しても安全です。
+--
+-- ▼ 実行するSQL（2テーブル分）
+--
+-- CREATE TABLE IF NOT EXISTS notices (
+--   id           uuid        DEFAULT gen_random_uuid() PRIMARY KEY,
+--   created_by   uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+--   title        text        NOT NULL,
+--   body         text,
+--   notice_type  text        NOT NULL DEFAULT 'notice' CHECK (notice_type IN ('notice', 'todo')),
+--   is_active    boolean     NOT NULL DEFAULT true,
+--   created_at   timestamptz DEFAULT now(),
+--   updated_at   timestamptz DEFAULT now()
+-- );
+-- CREATE INDEX IF NOT EXISTS idx_notices_created_by ON notices(created_by);
+-- CREATE INDEX IF NOT EXISTS idx_notices_is_active  ON notices(is_active);
+-- ALTER TABLE notices DISABLE ROW LEVEL SECURITY;
+--
+-- CREATE TABLE IF NOT EXISTS notice_completions (
+--   id           uuid        DEFAULT gen_random_uuid() PRIMARY KEY,
+--   notice_id    uuid        NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
+--   user_id      uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+--   completed_at timestamptz DEFAULT now(),
+--   UNIQUE (notice_id, user_id)
+-- );
+-- CREATE INDEX IF NOT EXISTS idx_notice_completions_notice ON notice_completions(notice_id);
+-- CREATE INDEX IF NOT EXISTS idx_notice_completions_user   ON notice_completions(user_id);
+-- ALTER TABLE notice_completions DISABLE ROW LEVEL SECURITY;
+--
+-- ※ ALTER TABLE notices DISABLE ROW LEVEL SECURITY; を実行しないと
+--    保存時に「row-level security policy」エラーが発生します。
+-- ============================================================
