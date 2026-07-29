@@ -1,4 +1,4 @@
-import { User, Tournament, MandalaChart, MandalaReflection, GoalUpdatePhase, DailyRecord, DailyRecordWithUser, Comment, PhysicalRecord, MaxTrainingRecord, PracticeSession, GameStat, CsvStatRow, EvaluationQuestion, EvaluationTask, EvaluationAnswer, EvaluationDelivery, EvaluationPair, EvaluationGroup, EvaluationGroupMember, SscPlan } from '@/types/database'
+import { User, Tournament, MandalaChart, MandalaReflection, GoalUpdatePhase, DailyRecord, DailyRecordWithUser, Comment, PhysicalRecord, MaxTrainingRecord, PracticeSession, GameStat, CsvStatRow, EvaluationQuestion, EvaluationTask, EvaluationAnswer, EvaluationDelivery, EvaluationPair, EvaluationGroup, EvaluationGroupMember, SscPlan, Notice, NoticeCompletion } from '@/types/database'
 import { getSupabase, isSupabaseConfigured } from './supabase'
 
 // ============================================================
@@ -2649,5 +2649,280 @@ export function calcCategoryScores(
     out[cat] = d && d.count > 0 ? Math.round((d.sum / d.count) * 10) / 10 : 0
   }
   return out
+}
+
+// ============================================================
+// 10ヶ条評価 配信削除機能（2026-07-29 追加）
+// 指導者が送信済みの回答依頼（配信）を削除する。
+// 関連するタスク・回答データを連動して消去する。
+// ============================================================
+
+/**
+ * 指定配信を削除する（コーチ専用）。
+ * 削除対象: evaluation_deliveries / evaluation_tasks / evaluation_answers
+ * 削除後、選手ダッシュボードの通知バナーも自動的に消える
+ * （pending タスクが消えるため getPendingEvaluationTasks() が0件を返す）。
+ * @param deliveryId 削除する配信のID
+ */
+export async function deleteEvaluationDelivery(deliveryId: string): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    // デモモード: インメモリから関連データをすべて削除する
+    const taskIds = demoEvaluationTasks
+      .filter(t => t.delivery_id === deliveryId)
+      .map(t => t.id)
+    // 回答を削除する
+    demoEvaluationAnswers = demoEvaluationAnswers.filter(a => !taskIds.includes(a.task_id))
+    // タスクを削除する
+    demoEvaluationTasks = demoEvaluationTasks.filter(t => t.delivery_id !== deliveryId)
+    // 配信を削除する
+    demoEvaluationDeliveries = demoEvaluationDeliveries.filter(d => d.id !== deliveryId)
+    return
+  }
+
+  const supabase = getSupabase()
+
+  // 1. 配信に紐づくタスク一覧を取得する
+  const { data: tasks } = await supabase
+    .from('evaluation_tasks')
+    .select('id')
+    .eq('delivery_id', deliveryId)
+  const taskIds = (tasks || []).map((t: { id: string }) => t.id)
+
+  // 2. タスクに紐づく回答を削除する
+  if (taskIds.length > 0) {
+    const { error: ansErr } = await supabase
+      .from('evaluation_answers')
+      .delete()
+      .in('task_id', taskIds)
+    if (ansErr) {
+      console.error('[data] deleteEvaluationDelivery() 回答削除エラー:', ansErr.message)
+      throw ansErr
+    }
+  }
+
+  // 3. タスクを削除する
+  const { error: taskErr } = await supabase
+    .from('evaluation_tasks')
+    .delete()
+    .eq('delivery_id', deliveryId)
+  if (taskErr) {
+    console.error('[data] deleteEvaluationDelivery() タスク削除エラー:', taskErr.message)
+    throw taskErr
+  }
+
+  // 4. 配信を削除する
+  const { error: delErr } = await supabase
+    .from('evaluation_deliveries')
+    .delete()
+    .eq('id', deliveryId)
+  if (delErr) {
+    console.error('[data] deleteEvaluationDelivery() 配信削除エラー:', delErr.message)
+    throw delErr
+  }
+}
+
+// ============================================================
+// 連絡事項・TODOリスト機能（2026-07-29 追加）
+// 指導者・選手の双方向から発信できる連絡・タスク管理
+// ============================================================
+
+// ---- デモ用インメモリデータ ----
+
+let demoNotices: Notice[] = []
+let demoNoticeCompletions: NoticeCompletion[] = []
+
+/**
+ * アクティブな連絡事項・TODOリストを取得する。
+ * チェック済み（自分が完了済み）のものはフロントエンドでフィルタする想定。
+ * @param currentUserId 現在ログインしているユーザーのID（完了状態の判定に使用）
+ */
+export async function getNotices(currentUserId: string): Promise<Notice[]> {
+  if (!isSupabaseConfigured()) {
+    return demoNotices
+      .filter(n => n.is_active)
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
+      .map(n => ({
+        ...n,
+        creator: (() => {
+          const u = DEMO_USERS.find(x => x.id === n.created_by)
+          return u ? { id: u.id, name: u.name, role: u.role } : null
+        })(),
+        completions: demoNoticeCompletions.filter(c => c.notice_id === n.id),
+      }))
+  }
+
+  const { data, error } = await getSupabase()
+    .from('notices')
+    .select('*, creator:users!notices_created_by_fkey(id, name, role), completions:notice_completions(*)')
+    .eq('is_active', true)
+    .order('created_at', { ascending: false })
+  if (error) {
+    console.error('[data] getNotices() でエラーが発生しました:', error.message)
+    return []
+  }
+  return data || []
+}
+
+/**
+ * 連絡事項・TODOを新規作成する。
+ * 指導者・選手どちらからも作成可能。
+ * @param createdBy  作成者のuser_id
+ * @param title      タイトル・内容
+ * @param body       詳細本文（省略可）
+ * @param noticeType 'notice'（連絡事項）または 'todo'（TODOタスク）
+ */
+export async function createNotice(
+  createdBy: string,
+  title: string,
+  body: string | null,
+  noticeType: 'notice' | 'todo',
+): Promise<Notice> {
+  const now = new Date().toISOString()
+
+  if (!isSupabaseConfigured()) {
+    const notice: Notice = {
+      id: `notice-${Date.now()}`,
+      created_by: createdBy,
+      title,
+      body: body || null,
+      notice_type: noticeType,
+      is_active: true,
+      created_at: now,
+      updated_at: now,
+    }
+    demoNotices.push(notice)
+    const creator = DEMO_USERS.find(u => u.id === createdBy)
+    return {
+      ...notice,
+      creator: creator ? { id: creator.id, name: creator.name, role: creator.role } : null,
+      completions: [],
+    }
+  }
+
+  const { data, error } = await getSupabase()
+    .from('notices')
+    .insert({ created_by: createdBy, title, body: body || null, notice_type: noticeType, is_active: true })
+    .select('*, creator:users!notices_created_by_fkey(id, name, role), completions:notice_completions(*)')
+    .single()
+  if (error) {
+    console.error('[data] createNotice() でエラーが発生しました:', error.message)
+    throw error
+  }
+  return data
+}
+
+/**
+ * 連絡事項・TODOを更新する。
+ * 作成者本人のみ呼び出し可能（呼び出し元でチェックすること）。
+ */
+export async function updateNotice(
+  noticeId: string,
+  title: string,
+  body: string | null,
+): Promise<void> {
+  const now = new Date().toISOString()
+
+  if (!isSupabaseConfigured()) {
+    const idx = demoNotices.findIndex(n => n.id === noticeId)
+    if (idx >= 0) {
+      demoNotices[idx] = { ...demoNotices[idx], title, body: body || null, updated_at: now }
+    }
+    return
+  }
+
+  const { error } = await getSupabase()
+    .from('notices')
+    .update({ title, body: body || null, updated_at: now })
+    .eq('id', noticeId)
+  if (error) {
+    console.error('[data] updateNotice() でエラーが発生しました:', error.message)
+    throw error
+  }
+}
+
+/**
+ * 連絡事項・TODOを論理削除する（is_active = false に設定）。
+ * 作成者または指導者（staff）のみ呼び出し可能（呼び出し元でチェックすること）。
+ */
+export async function deleteNotice(noticeId: string): Promise<void> {
+  const now = new Date().toISOString()
+
+  if (!isSupabaseConfigured()) {
+    const idx = demoNotices.findIndex(n => n.id === noticeId)
+    if (idx >= 0) {
+      demoNotices[idx] = { ...demoNotices[idx], is_active: false, updated_at: now }
+    }
+    return
+  }
+
+  const { error } = await getSupabase()
+    .from('notices')
+    .update({ is_active: false, updated_at: now })
+    .eq('id', noticeId)
+  if (error) {
+    console.error('[data] deleteNotice() でエラーが発生しました:', error.message)
+    throw error
+  }
+}
+
+/**
+ * ユーザーが連絡事項・TODOにチェックを入れる（完了）。
+ * チェックを入れると自分の画面からは非表示になるが、データは保持される。
+ * @param noticeId チェックする連絡事項のID
+ * @param userId   チェックするユーザーのID
+ */
+export async function completeNotice(noticeId: string, userId: string): Promise<void> {
+  const now = new Date().toISOString()
+
+  if (!isSupabaseConfigured()) {
+    const alreadyDone = demoNoticeCompletions.find(
+      c => c.notice_id === noticeId && c.user_id === userId
+    )
+    if (!alreadyDone) {
+      demoNoticeCompletions.push({
+        id: `completion-${Date.now()}`,
+        notice_id: noticeId,
+        user_id: userId,
+        completed_at: now,
+      })
+    }
+    return
+  }
+
+  // 重複チェック（upsert）
+  const { error } = await getSupabase()
+    .from('notice_completions')
+    .upsert(
+      { notice_id: noticeId, user_id: userId, completed_at: now },
+      { onConflict: 'notice_id,user_id' }
+    )
+  if (error) {
+    console.error('[data] completeNotice() でエラーが発生しました:', error.message)
+    throw error
+  }
+}
+
+/**
+ * ユーザーが連絡事項・TODOのチェックを外す（未完了に戻す）。
+ * @param noticeId チェックを外す連絡事項のID
+ * @param userId   チェックを外すユーザーのID
+ */
+export async function uncompleteNotice(noticeId: string, userId: string): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    demoNoticeCompletions = demoNoticeCompletions.filter(
+      c => !(c.notice_id === noticeId && c.user_id === userId)
+    )
+    return
+  }
+
+  const { error } = await getSupabase()
+    .from('notice_completions')
+    .delete()
+    .eq('notice_id', noticeId)
+    .eq('user_id', userId)
+  if (error) {
+    console.error('[data] uncompleteNotice() でエラーが発生しました:', error.message)
+    throw error
+  }
 }
 

@@ -387,3 +387,38 @@ CREATE TABLE IF NOT EXISTS evaluation_group_members (
 CREATE INDEX IF NOT EXISTS idx_eval_group_members_group  ON evaluation_group_members(group_id);
 CREATE INDEX IF NOT EXISTS idx_eval_group_members_user   ON evaluation_group_members(user_id);
 ALTER TABLE evaluation_group_members DISABLE ROW LEVEL SECURITY;
+
+-- ============================================================
+-- 14. 連絡事項・TODOリスト機能（2026-07-29 追加）
+--     指導者・選手の双方向から発信できる連絡・タスク管理。
+--     チェック（完了）したユーザーは notice_completions テーブルで管理。
+--     すべて IF NOT EXISTS のため、再実行しても安全です。
+-- ============================================================
+
+-- 14-1. notices（連絡事項・TODOアイテム）
+CREATE TABLE IF NOT EXISTS notices (
+  id           uuid        DEFAULT gen_random_uuid() PRIMARY KEY,
+  created_by   uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title        text        NOT NULL,
+  body         text,
+  notice_type  text        NOT NULL DEFAULT 'notice' CHECK (notice_type IN ('notice', 'todo')),
+  is_active    boolean     NOT NULL DEFAULT true,
+  created_at   timestamptz DEFAULT now(),
+  updated_at   timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_notices_created_by ON notices(created_by);
+CREATE INDEX IF NOT EXISTS idx_notices_is_active  ON notices(is_active);
+ALTER TABLE notices DISABLE ROW LEVEL SECURITY;
+
+-- 14-2. notice_completions（チェック（完了）記録）
+-- ユーザーがチェックを入れると1レコード追加される（論理削除方式）。
+CREATE TABLE IF NOT EXISTS notice_completions (
+  id           uuid        DEFAULT gen_random_uuid() PRIMARY KEY,
+  notice_id    uuid        NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
+  user_id      uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  completed_at timestamptz DEFAULT now(),
+  UNIQUE (notice_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_notice_completions_notice ON notice_completions(notice_id);
+CREATE INDEX IF NOT EXISTS idx_notice_completions_user   ON notice_completions(user_id);
+ALTER TABLE notice_completions DISABLE ROW LEVEL SECURITY;
