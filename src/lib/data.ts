@@ -2597,27 +2597,52 @@ export async function saveSscPlan(
 
 /**
  * 回答リストからカテゴリ別平均スコアを算出する。
- * レーダーチャート描画に使用する。
+ * レーダーチャート描画・バーチャート描画に使用する。
+ *
+ * 【バグ修正 2026-07-29】
+ * 旧実装では filtered.find() で質問ごとに1件しか取得しておらず、
+ * 他者評価が複数評価者から届いた場合に最初の1件しかカウントされず
+ * スコアが欠落していた。
+ * → 各質問IDの回答を filter() で全件集約し、評価者をまたいで正しく平均化する。
+ *
  * @param answers      対象の回答リスト
- * @param evaluatorId  自己評価の場合は自分のID、他者評価の場合は null（全他者評価の平均）
+ * @param evaluatorId  自己評価の場合は自分のID、他者評価の場合は省略（全他者評価の平均）
  */
 export function calcCategoryScores(
   answers: EvaluationAnswer[],
   evaluatorId?: string
 ): Record<string, number> {
+  // evaluatorId が指定された場合は自己評価のみ絞り込む
   const filtered = evaluatorId
     ? answers.filter(a => a.evaluator_id === evaluatorId)
     : answers
 
+  // カテゴリごとの集計テーブル
   const result: Record<string, { sum: number; count: number }> = {}
+
   for (const q of EVALUATION_QUESTIONS) {
     if (!result[q.category]) result[q.category] = { sum: 0, count: 0 }
-    const ans = filtered.find(a => a.question_id === q.id)
-    if (ans) {
-      result[q.category].sum += ans.score
-      result[q.category].count++
+
+    if (evaluatorId) {
+      // ── 自己評価モード：評価者1人なので find() でも問題ないが find() → filter() に統一 ──
+      const matching = filtered.filter(a => a.question_id === q.id)
+      for (const ans of matching) {
+        result[q.category].sum += ans.score
+        result[q.category].count++
+      }
+    } else {
+      // ── 他者評価モード：複数評価者の「1問あたり平均」を求め、カテゴリ平均に加算 ──
+      // 同じ question_id に対して複数評価者が回答している場合、
+      // まず評価者ごとにスコアを収集し、その平均を1カテゴリ分のスコアとして扱う。
+      const matching = filtered.filter(a => a.question_id === q.id)
+      if (matching.length > 0) {
+        const questionAvg = matching.reduce((s, a) => s + a.score, 0) / matching.length
+        result[q.category].sum += questionAvg
+        result[q.category].count++
+      }
     }
   }
+
   const out: Record<string, number> = {}
   for (const cat of EVALUATION_CATEGORIES) {
     const d = result[cat]
