@@ -2751,14 +2751,27 @@ export async function getNotices(currentUserId: string): Promise<Notice[]> {
       }))
   }
 
+  // created_by → users の外部キーリレーションを使って作成者情報を結合する
+  // Supabase の自動生成FK名 (notices_created_by_fkey) に依存せず、
+  // カラム名指定 (created_by) で結合することで確実に動作させる
   const { data, error } = await getSupabase()
     .from('notices')
-    .select('*, creator:users!notices_created_by_fkey(id, name, role), completions:notice_completions(*)')
+    .select('*, creator:users!created_by(id, name, role), completions:notice_completions(*)')
     .eq('is_active', true)
     .order('created_at', { ascending: false })
   if (error) {
     console.error('[data] getNotices() でエラーが発生しました:', error.message)
-    return []
+    // リレーション結合エラーの場合はシンプルなクエリでリトライする
+    const { data: fallback, error: fallbackErr } = await getSupabase()
+      .from('notices')
+      .select('*')
+      .eq('is_active', true)
+      .order('created_at', { ascending: false })
+    if (fallbackErr) {
+      console.error('[data] getNotices() フォールバッククエリもエラー:', fallbackErr.message)
+      return []
+    }
+    return fallback || []
   }
   return data || []
 }
@@ -2799,10 +2812,12 @@ export async function createNotice(
     }
   }
 
+  // INSERT後、作成者情報を結合して返す
+  // カラム名指定 (created_by) で結合することでFK制約名に依存しない
   const { data, error } = await getSupabase()
     .from('notices')
     .insert({ created_by: createdBy, title, body: body || null, notice_type: noticeType, is_active: true })
-    .select('*, creator:users!notices_created_by_fkey(id, name, role), completions:notice_completions(*)')
+    .select('*, creator:users!created_by(id, name, role), completions:notice_completions(*)')
     .single()
   if (error) {
     console.error('[data] createNotice() でエラーが発生しました:', error.message)
