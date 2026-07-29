@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { User, DailyRecord, DailyRecordWithUser, Tournament, PhysicalRecord, MaxTrainingRecord, PracticeSession, GoalUpdatePhase, EvaluationDelivery, EvaluationAnswer, EvaluationGroup, EvaluationGroupMember } from '@/types/database'
-import { getUsers, getAllDailyRecords, getActiveTournament, addComment, updateComment, getTeamConditionRecords, getAllPhysicalRecords, getAllMaxTrainingRecords, getPracticeSession, getPracticeSessions, upsertPracticeSession, getMindsetScores, getActiveGoalUpdatePhase, startGoalUpdatePhase, endGoalUpdatePhase, getEvaluationDeliveries, deliverEvaluationTasks, getAllEvaluationAnswers, getEvaluationGroups, addEvaluationGroup, updateEvaluationGroup, deleteEvaluationGroup, addEvaluationGroupMember, removeEvaluationGroupMember, updateEvaluationDelivery, EVALUATION_CATEGORIES, calcCategoryScores } from '@/lib/data'
+import { User, DailyRecord, DailyRecordWithUser, Tournament, PhysicalRecord, MaxTrainingRecord, PracticeSession, GoalUpdatePhase, EvaluationDelivery, EvaluationAnswer, EvaluationGroup, EvaluationGroupMember, Notice } from '@/types/database'
+import { getUsers, getAllDailyRecords, getActiveTournament, addComment, updateComment, getTeamConditionRecords, getAllPhysicalRecords, getAllMaxTrainingRecords, getPracticeSession, getPracticeSessions, upsertPracticeSession, getMindsetScores, getActiveGoalUpdatePhase, startGoalUpdatePhase, endGoalUpdatePhase, getEvaluationDeliveries, deliverEvaluationTasks, getAllEvaluationAnswers, getEvaluationGroups, addEvaluationGroup, updateEvaluationGroup, deleteEvaluationGroup, addEvaluationGroupMember, removeEvaluationGroupMember, updateEvaluationDelivery, deleteEvaluationDelivery, EVALUATION_CATEGORIES, calcCategoryScores, getNotices, createNotice, deleteNotice, completeNotice, uncompleteNotice } from '@/lib/data'
 import { getSession } from '@/lib/session'
 import Header from '@/components/Header'
 import BottomNav from '@/components/BottomNav'
@@ -188,6 +188,18 @@ export default function CoachDashboard() {
   const [editDeliveryId, setEditDeliveryId] = useState<string | null>(null)
   const [editDeliveryLabel, setEditDeliveryLabel] = useState('')
   const [editDeliverySaving, setEditDeliverySaving] = useState(false)
+  // ---- 配信削除 state ----
+  const [deletingDeliveryId, setDeletingDeliveryId] = useState<string | null>(null)
+
+  // ---- 連絡事項・TODOリスト state ----
+  const [notices, setNotices] = useState<Notice[]>([])
+  const [noticesLoading, setNoticesLoading] = useState(false)
+  // 新規作成モーダル
+  const [showNoticeModal, setShowNoticeModal] = useState(false)
+  const [noticeTitle, setNoticeTitle] = useState('')
+  const [noticeBody, setNoticeBody] = useState('')
+  const [noticeType, setNoticeType] = useState<'notice' | 'todo'>('notice')
+  const [noticeSaving, setNoticeSaving] = useState(false)
 
   useEffect(() => {
     const session = getSession()
@@ -195,6 +207,8 @@ export default function CoachDashboard() {
     if (session.role !== 'staff') { router.push('/player/dashboard'); return }
     setUser(session)
     loadData()
+    // 連絡事項・TODOをsessionのIDで取得する
+    getNotices(session.id).then(data => setNotices(data)).catch(e => console.error('[coach] 連絡事項取得エラー:', e))
   }, [router])
 
   const loadData = async () => {
@@ -225,6 +239,7 @@ export default function CoachDashboard() {
     } finally {
       setLoading(false)
     }
+
   }
 
   /**
@@ -608,6 +623,74 @@ export default function CoachDashboard() {
     }
   }
 
+  // ---- 配信削除処理（タスク・回答も連動削除） ----
+  const handleDeleteDelivery = async (deliveryId: string, deliveryLabel: string) => {
+    if (!confirm(`「${deliveryLabel}」の配信を削除しますか？\n関連する回答データ・タスクもすべて削除されます。\nこの操作は取り消せません。`)) return
+    setDeletingDeliveryId(deliveryId)
+    try {
+      await deleteEvaluationDelivery(deliveryId)
+      setEvaluationDeliveries(prev => prev.filter(d => d.id !== deliveryId))
+      // 削除した配信が選択中だった場合は選択をリセットする
+      if (selectedDeliveryId === deliveryId) {
+        setSelectedDeliveryId(null)
+        setEvaluationAnswers([])
+      }
+    } catch (e) {
+      console.error('[coach] 配信削除エラー:', e)
+      alert('削除に失敗しました。再度お試しください。')
+    } finally {
+      setDeletingDeliveryId(null)
+    }
+  }
+
+  // ---- 連絡事項・TODO作成処理 ----
+  const handleCreateNotice = async () => {
+    if (!user || !noticeTitle.trim()) return
+    setNoticeSaving(true)
+    try {
+      const newNotice = await createNotice(user.id, noticeTitle.trim(), noticeBody.trim() || null, noticeType)
+      setNotices(prev => [newNotice, ...prev])
+      setNoticeTitle('')
+      setNoticeBody('')
+      setNoticeType('notice')
+      setShowNoticeModal(false)
+    } catch (e) {
+      console.error('[coach] 連絡事項作成エラー:', e)
+      alert('作成に失敗しました。再度お試しください。')
+    } finally {
+      setNoticeSaving(false)
+    }
+  }
+
+  // ---- 連絡事項・TODO削除処理 ----
+  const handleDeleteNotice = async (noticeId: string) => {
+    if (!confirm('この連絡事項・TODOを削除しますか？')) return
+    try {
+      await deleteNotice(noticeId)
+      setNotices(prev => prev.filter(n => n.id !== noticeId))
+    } catch (e) {
+      console.error('[coach] 連絡事項削除エラー:', e)
+      alert('削除に失敗しました。再度お試しください。')
+    }
+  }
+
+  // ---- 連絡事項・TODOチェック処理（指導者自身のチェック） ----
+  const handleToggleNoticeComplete = async (noticeId: string, isCompleted: boolean) => {
+    if (!user) return
+    try {
+      if (isCompleted) {
+        await uncompleteNotice(noticeId, user.id)
+      } else {
+        await completeNotice(noticeId, user.id)
+      }
+      // 再取得する
+      const data = await getNotices(user.id)
+      setNotices(data)
+    } catch (e) {
+      console.error('[coach] チェック処理エラー:', e)
+    }
+  }
+
   // ---- 配信名編集モーダルを開く ----
   const openEditDeliveryModal = (delivery: EvaluationDelivery) => {
     setEditDeliveryId(delivery.id)
@@ -804,6 +887,18 @@ export default function CoachDashboard() {
             />
           )}
         </div>
+
+        {/* ====== 連絡事項・TODOリスト（ダッシュボード最上部） ====== */}
+        <NoticeBoard
+          notices={notices}
+          currentUserId={user.id}
+          isCoach={true}
+          loading={noticesLoading}
+          onToggleComplete={handleToggleNoticeComplete}
+          onDelete={handleDeleteNotice}
+          onAddClick={() => setShowNoticeModal(true)}
+          allUsersCount={allUsers.filter(u => u.role === 'player').length + allUsers.filter(u => u.role === 'staff').length}
+        />
 
         {/* ====== 目標更新フェーズ バナー（今回追加） ====== */}
         {activePhase ? (
@@ -1914,6 +2009,21 @@ export default function CoachDashboard() {
                           <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
                         </svg>
                       </button>
+                      {/* 削除ボタン（回答・タスク含む連動削除） */}
+                      <button
+                        onClick={() => handleDeleteDelivery(d.id, d.label)}
+                        disabled={deletingDeliveryId === d.id}
+                        className="text-red-300 hover:text-red-500 hover:bg-red-50 p-1 rounded-lg transition-colors disabled:opacity-50"
+                        title="この配信を削除（回答データも削除されます）"
+                      >
+                        {deletingDeliveryId === d.id ? (
+                          <span className="text-xs">...</span>
+                        ) : (
+                          <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                          </svg>
+                        )}
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -2331,6 +2441,205 @@ export default function CoachDashboard() {
 
       </main>
       <BottomNav role="staff" />
+
+      {/* ====== 連絡事項・TODO新規作成モーダル ====== */}
+      {showNoticeModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-xl">
+            <h3 className="text-lg font-bold text-gray-800 mb-4">📢 連絡事項・TODOを追加</h3>
+
+            {/* 種別選択 */}
+            <div className="flex gap-2 mb-4">
+              <button
+                onClick={() => setNoticeType('notice')}
+                className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${
+                  noticeType === 'notice' ? 'bg-blue-500 text-white shadow-md' : 'bg-gray-100 text-gray-600'
+                }`}
+              >
+                📢 連絡事項
+              </button>
+              <button
+                onClick={() => setNoticeType('todo')}
+                className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${
+                  noticeType === 'todo' ? 'bg-green-500 text-white shadow-md' : 'bg-gray-100 text-gray-600'
+                }`}
+              >
+                ✅ TODO
+              </button>
+            </div>
+
+            <div className="mb-4">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                タイトル・内容 <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={noticeTitle}
+                onChange={(e) => setNoticeTitle(e.target.value)}
+                placeholder="例: 明日の練習は17時開始です"
+                className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-brand-main focus:outline-none text-sm"
+              />
+            </div>
+
+            <div className="mb-5">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                詳細（省略可）
+              </label>
+              <textarea
+                value={noticeBody}
+                onChange={(e) => setNoticeBody(e.target.value)}
+                placeholder="詳細な説明があれば入力してください"
+                rows={3}
+                className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-brand-main focus:outline-none text-sm resize-none"
+              />
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setShowNoticeModal(false); setNoticeTitle(''); setNoticeBody('') }}
+                className="flex-1 py-2.5 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={handleCreateNotice}
+                disabled={noticeSaving || !noticeTitle.trim()}
+                className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${
+                  noticeSaving || !noticeTitle.trim()
+                    ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                    : 'bg-brand-main text-brand-dark hover:bg-yellow-400 shadow-md'
+                }`}
+              >
+                {noticeSaving ? '保存中...' : '追加する'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============================================================
+// 連絡事項・TODOボード コンポーネント（指導者・選手共通）
+// ============================================================
+function NoticeBoard({
+  notices,
+  currentUserId,
+  isCoach,
+  loading,
+  onToggleComplete,
+  onDelete,
+  onAddClick,
+  allUsersCount,
+}: {
+  notices: Notice[]
+  currentUserId: string
+  isCoach: boolean
+  loading: boolean
+  onToggleComplete: (noticeId: string, isCompleted: boolean) => void
+  onDelete?: (noticeId: string) => void
+  onAddClick: () => void
+  allUsersCount?: number
+}) {
+  // 自分がチェック済みのものを除いた一覧（表示用）
+  const visibleNotices = notices.filter(n => {
+    const completedByMe = (n.completions || []).some(c => c.user_id === currentUserId)
+    return !completedByMe
+  })
+
+  return (
+    <div className="mb-4">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-sm font-bold text-gray-700">📢 連絡事項・TODOリスト</h3>
+        <button
+          onClick={onAddClick}
+          className="text-xs bg-brand-main text-brand-dark font-bold px-3 py-1.5 rounded-xl hover:bg-yellow-400 transition-colors shadow-sm"
+        >
+          ＋ 追加
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="bg-white rounded-2xl p-4 shadow-sm text-center text-xs text-gray-400">
+          読み込み中...
+        </div>
+      ) : visibleNotices.length === 0 ? (
+        <div className="bg-white rounded-2xl p-4 shadow-sm text-center text-xs text-gray-400">
+          現在の連絡事項・TODOはありません
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {visibleNotices.map(n => {
+            const completedByMe = (n.completions || []).some(c => c.user_id === currentUserId)
+            const completedCount = (n.completions || []).length
+            const uncheckedCount = allUsersCount !== undefined ? Math.max(0, allUsersCount - completedCount) : null
+
+            return (
+              <div key={n.id} className="bg-white rounded-2xl p-3 shadow-sm flex items-start gap-3">
+                {/* チェックボックス */}
+                <button
+                  onClick={() => onToggleComplete(n.id, completedByMe)}
+                  className={`shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors mt-0.5 ${
+                    completedByMe
+                      ? 'bg-green-500 border-green-500 text-white'
+                      : 'border-gray-300 hover:border-green-400'
+                  }`}
+                >
+                  {completedByMe && (
+                    <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                    </svg>
+                  )}
+                </button>
+
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className={`text-xs font-bold px-1.5 py-0.5 rounded-full ${
+                      n.notice_type === 'todo' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
+                    }`}>
+                      {n.notice_type === 'todo' ? '✅ TODO' : '📢 連絡'}
+                    </span>
+                    <p className="text-sm font-medium text-gray-800 leading-tight">{n.title}</p>
+                  </div>
+                  {n.body && (
+                    <p className="text-xs text-gray-500 mt-1 leading-relaxed whitespace-pre-wrap">{n.body}</p>
+                  )}
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                    <span className="text-xs text-gray-400">
+                      {n.creator?.name || '不明'}・{new Date(n.created_at).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' })}
+                    </span>
+                    {/* 指導者のみ：未チェック人数を表示 */}
+                    {isCoach && uncheckedCount !== null && uncheckedCount > 0 && (
+                      <span className="text-xs font-bold text-orange-600 bg-orange-50 px-2 py-0.5 rounded-full">
+                        未チェック {uncheckedCount}名
+                      </span>
+                    )}
+                    {isCoach && uncheckedCount === 0 && completedCount > 0 && (
+                      <span className="text-xs font-bold text-green-600 bg-green-50 px-2 py-0.5 rounded-full">
+                        全員チェック済み ✓
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* 削除ボタン（指導者のみ表示） */}
+                {isCoach && onDelete && (
+                  <button
+                    onClick={() => onDelete(n.id)}
+                    className="shrink-0 text-gray-300 hover:text-red-400 transition-colors p-1"
+                    title="削除"
+                  >
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

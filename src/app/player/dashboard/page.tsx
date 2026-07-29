@@ -2,8 +2,8 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { User, Tournament, DailyRecord, EvaluationTask } from '@/types/database'
-import { getActiveTournament, getDailyRecords, calculateStreak, getPendingEvaluationTasks } from '@/lib/data'
+import { User, Tournament, DailyRecord, EvaluationTask, Notice } from '@/types/database'
+import { getActiveTournament, getDailyRecords, calculateStreak, getPendingEvaluationTasks, getNotices, createNotice, completeNotice, uncompleteNotice } from '@/lib/data'
 import { getSession } from '@/lib/session'
 import Header from '@/components/Header'
 import BottomNav from '@/components/BottomNav'
@@ -22,6 +22,14 @@ export default function PlayerDashboard() {
   // 未完了の10ヶ条評価タスク（通知バナー表示用）
   const [pendingEvalTasks, setPendingEvalTasks] = useState<EvaluationTask[]>([])
   const [loading, setLoading] = useState(true)
+  // 連絡事項・TODOリスト
+  const [notices, setNotices] = useState<Notice[]>([])
+  // 連絡事項・TODO作成モーダル
+  const [showNoticeModal, setShowNoticeModal] = useState(false)
+  const [noticeTitle, setNoticeTitle] = useState('')
+  const [noticeBody, setNoticeBody] = useState('')
+  const [noticeType, setNoticeType] = useState<'notice' | 'todo'>('notice')
+  const [noticeSaving, setNoticeSaving] = useState(false)
 
   useEffect(() => {
     const session = getSession()
@@ -48,9 +56,47 @@ export default function PlayerDashboard() {
         setPendingEvalTasks(evalTasks)
       } catch (e) { console.error(e) }
       finally { setLoading(false) }
+      // 連絡事項・TODOを非同期で取得する（ページ描画をブロックしない）
+      getNotices(userData.id).then(data => setNotices(data)).catch(e => console.error('[player] 連絡事項取得エラー:', e))
     }
     loadData()
   }, [router])
+
+  /** 連絡事項・TODOチェック処理 */
+  const handleToggleNoticeComplete = async (noticeId: string, isCompleted: boolean) => {
+    if (!user) return
+    try {
+      if (isCompleted) {
+        await uncompleteNotice(noticeId, user.id)
+      } else {
+        await completeNotice(noticeId, user.id)
+      }
+      // チェック後は自分の画面からは消える（再取得で最新状態に）
+      const data = await getNotices(user.id)
+      setNotices(data)
+    } catch (e) {
+      console.error('[player] チェック処理エラー:', e)
+    }
+  }
+
+  /** 連絡事項・TODO作成処理（選手からも追加可） */
+  const handleCreateNotice = async () => {
+    if (!user || !noticeTitle.trim()) return
+    setNoticeSaving(true)
+    try {
+      const newNotice = await createNotice(user.id, noticeTitle.trim(), noticeBody.trim() || null, noticeType)
+      setNotices(prev => [newNotice, ...prev])
+      setNoticeTitle('')
+      setNoticeBody('')
+      setNoticeType('notice')
+      setShowNoticeModal(false)
+    } catch (e) {
+      console.error('[player] 連絡事項作成エラー:', e)
+      alert('作成に失敗しました。再度お試しください。')
+    } finally {
+      setNoticeSaving(false)
+    }
+  }
 
   if (loading || !user) {
     return (
@@ -97,6 +143,14 @@ export default function PlayerDashboard() {
     <div className="min-h-screen bg-brand-bg pb-20 md:pb-8">
       <Header userName={user.name} role="player" />
       <main className="max-w-2xl mx-auto px-4 py-4 space-y-4">
+        {/* ====== 連絡事項・TODOリスト（ダッシュボード最上部） ====== */}
+        <PlayerNoticeBoard
+          notices={notices}
+          currentUserId={user.id}
+          onToggleComplete={handleToggleNoticeComplete}
+          onAddClick={() => setShowNoticeModal(true)}
+        />
+
         {/* 10ヶ条評価タスク通知バナー */}
         {pendingEvalTasks.length > 0 && (
           <div
@@ -248,8 +302,144 @@ export default function PlayerDashboard() {
             <span className="text-sm mt-1 block">目標を確認する</span>
           </button>
         </div>
+
+        {/* 連絡＆TODOボタン */}
+        <button
+          onClick={() => setShowNoticeModal(true)}
+          className="w-full bg-blue-50 border-2 border-blue-200 text-blue-700 font-bold py-3 rounded-2xl hover:bg-blue-100 transition-all text-center text-sm"
+        >
+          📢 連絡＆TODO を追加する
+        </button>
       </main>
       <BottomNav role="player" />
+
+      {/* ====== 連絡事項・TODO作成モーダル ====== */}
+      {showNoticeModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-xl">
+            <h3 className="text-lg font-bold text-gray-800 mb-4">📢 連絡事項・TODOを追加</h3>
+
+            <div className="flex gap-2 mb-4">
+              <button
+                onClick={() => setNoticeType('notice')}
+                className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${noticeType === 'notice' ? 'bg-blue-500 text-white shadow-md' : 'bg-gray-100 text-gray-600'}`}
+              >
+                📢 連絡事項
+              </button>
+              <button
+                onClick={() => setNoticeType('todo')}
+                className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${noticeType === 'todo' ? 'bg-green-500 text-white shadow-md' : 'bg-gray-100 text-gray-600'}`}
+              >
+                ✅ TODO
+              </button>
+            </div>
+
+            <div className="mb-4">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                タイトル・内容 <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={noticeTitle}
+                onChange={(e) => setNoticeTitle(e.target.value)}
+                placeholder="例: 明日の自主練に参加します"
+                className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-brand-main focus:outline-none text-sm"
+              />
+            </div>
+
+            <div className="mb-5">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">詳細（省略可）</label>
+              <textarea
+                value={noticeBody}
+                onChange={(e) => setNoticeBody(e.target.value)}
+                placeholder="詳細を入力"
+                rows={3}
+                className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-brand-main focus:outline-none text-sm resize-none"
+              />
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setShowNoticeModal(false); setNoticeTitle(''); setNoticeBody('') }}
+                className="flex-1 py-2.5 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={handleCreateNotice}
+                disabled={noticeSaving || !noticeTitle.trim()}
+                className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${noticeSaving || !noticeTitle.trim() ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-brand-main text-brand-dark hover:bg-yellow-400 shadow-md'}`}
+              >
+                {noticeSaving ? '保存中...' : '追加する'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============================================================
+// 選手ダッシュボード用 連絡事項・TODOボード
+// ============================================================
+function PlayerNoticeBoard({
+  notices,
+  currentUserId,
+  onToggleComplete,
+  onAddClick,
+}: {
+  notices: Notice[]
+  currentUserId: string
+  onToggleComplete: (noticeId: string, isCompleted: boolean) => void
+  onAddClick: () => void
+}) {
+  // 自分がチェック済みのものを除外して表示
+  const visibleNotices = notices.filter(n => {
+    const completedByMe = (n.completions || []).some(c => c.user_id === currentUserId)
+    return !completedByMe
+  })
+
+  if (visibleNotices.length === 0) return null
+
+  return (
+    <div className="mb-4">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-sm font-bold text-gray-700">📢 連絡事項・TODOリスト</h3>
+      </div>
+      <div className="space-y-2">
+        {visibleNotices.map(n => {
+          const completedByMe = (n.completions || []).some(c => c.user_id === currentUserId)
+          return (
+            <div key={n.id} className="bg-white rounded-2xl p-3 shadow-sm flex items-start gap-3">
+              <button
+                onClick={() => onToggleComplete(n.id, completedByMe)}
+                className={`shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors mt-0.5 ${completedByMe ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300 hover:border-green-400'}`}
+              >
+                {completedByMe && (
+                  <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                  </svg>
+                )}
+              </button>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className={`text-xs font-bold px-1.5 py-0.5 rounded-full ${n.notice_type === 'todo' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
+                    {n.notice_type === 'todo' ? '✅ TODO' : '📢 連絡'}
+                  </span>
+                  <p className="text-sm font-medium text-gray-800 leading-tight">{n.title}</p>
+                </div>
+                {n.body && (
+                  <p className="text-xs text-gray-500 mt-1 leading-relaxed whitespace-pre-wrap">{n.body}</p>
+                )}
+                <p className="text-xs text-gray-400 mt-0.5">
+                  {n.creator?.name || '不明'}・{new Date(n.created_at).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' })}
+                </p>
+              </div>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
