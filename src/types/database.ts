@@ -321,6 +321,41 @@ export interface SscPlan {
   updated_at: string
 }
 
+// ============================================================
+// 連絡事項・TODOリスト機能（2026-07-29 追加）
+// 指導者・選手の双方向から発信できる連絡・タスク管理
+// ============================================================
+
+/**
+ * 連絡事項・TODOアイテム。
+ * 指導者・選手の双方から作成できる。
+ * チェック（完了）したユーザーは notice_completions テーブルで管理する。
+ */
+export interface Notice {
+  id: string
+  created_by: string       // 作成者のuser_id
+  title: string            // タイトル・内容
+  body?: string | null     // 詳細本文（省略可）
+  notice_type: 'notice' | 'todo'   // 連絡事項 or TODOタスク
+  is_active: boolean       // アクティブ（未削除）かどうか
+  created_at: string
+  updated_at: string
+  // joined
+  creator?: { id: string; name: string; role: string } | null
+  completions?: NoticeCompletion[]
+}
+
+/**
+ * 連絡事項・TODOの完了記録（チェックボックスの状態）。
+ * ユーザーがチェックすると追加される（論理削除）。
+ */
+export interface NoticeCompletion {
+  id: string
+  notice_id: string        // notices.id への外部キー
+  user_id: string          // チェックしたユーザーのuser_id
+  completed_at: string
+}
+
 /**
  * CSVインポート時の1行データ（バリデーション前の生データ）。
  * CSVの列名と対応する。
