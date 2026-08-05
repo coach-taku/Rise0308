@@ -14,6 +14,7 @@ import {
   getLatestSscPlan,
   getEvaluationAnswersForTarget,
   getEvaluationHistoryForPlayer,
+  getEvaluationDeliveries,
   calcCategoryScores,
   EVALUATION_CATEGORIES,
 } from '@/lib/data'
@@ -146,20 +147,47 @@ export default function MandalaPage() {
   /**
    * 10ヶ条評価の比較表・推移グラフ用データを取得する。
    * 選手自身のページで表示するため、自分のuser_idを被評価者として取得する。
+   *
+   * 【修正 2026-08-05】
+   * 全配信のデータが混在して正しく表示されない問題を修正。
+   * 最新の配信IDで絞り込んだ回答データを取得するよう変更した。
+   * 自己評価と他者評価の両データが欠落しないよう、取得ロジックを改善。
    */
   const loadEvalData = async (userId: string) => {
     setEvalLoading(true)
     try {
-      const [allAnswers, history] = await Promise.all([
-        getEvaluationAnswersForTarget(userId),
+      // 推移グラフ用の全配信履歴と、配信一覧を並行取得する
+      const [history, deliveries] = await Promise.all([
         getEvaluationHistoryForPlayer(userId),
+        getEvaluationDeliveries(),
       ])
-      // 自己評価（evaluator_id === userId）と他者評価（それ以外）に分ける
-      setEvalSelfAnswers(allAnswers.filter(a => a.evaluator_id === userId))
-      setEvalOthersAnswers(allAnswers.filter(a => a.evaluator_id !== userId))
       setEvalHistory(history)
+
+      if (deliveries.length === 0) {
+        // 配信がない場合はデータなし状態にする
+        setEvalSelfAnswers([])
+        setEvalOthersAnswers([])
+        return
+      }
+
+      // 最新の配信IDを取得する（配信は降順で返るため先頭が最新）
+      const latestDeliveryId = deliveries[0].id
+
+      // 最新配信のデータのみを取得する（複数配信データの混在を防ぐ）
+      const allAnswers = await getEvaluationAnswersForTarget(userId, latestDeliveryId)
+
+      // 自己評価（evaluator_id === userId）と他者評価（それ以外）に分ける
+      const selfAns = allAnswers.filter(a => a.evaluator_id === userId)
+      const othersAns = allAnswers.filter(a => a.evaluator_id !== userId)
+
+      // null/undefined ガード: 空配列で確実に初期化する
+      setEvalSelfAnswers(selfAns ?? [])
+      setEvalOthersAnswers(othersAns ?? [])
     } catch (e) {
       console.error('[mandala] 10ヶ条評価データ取得に失敗しました:', e)
+      // エラー時もクラッシュしないよう空配列でフォールバックする
+      setEvalSelfAnswers([])
+      setEvalOthersAnswers([])
     } finally {
       setEvalLoading(false)
     }
@@ -878,8 +906,12 @@ function EvaluationComparisonSection({
   othersAnswers: EvaluationAnswer[]
   loading: boolean
 }) {
-  const selfScores = useMemo(() => calcCategoryScores(selfAnswers, userId), [selfAnswers, userId])
-  const othersScores = useMemo(() => calcCategoryScores(othersAnswers), [othersAnswers])
+  // null/undefined ガード: 空配列にフォールバックしてクラッシュを防ぐ
+  const safeSelfAnswers = selfAnswers ?? []
+  const safeOthersAnswers = othersAnswers ?? []
+
+  const selfScores = useMemo(() => calcCategoryScores(safeSelfAnswers, userId), [safeSelfAnswers, userId])
+  const othersScores = useMemo(() => calcCategoryScores(safeOthersAnswers), [safeOthersAnswers])
 
   const selfValues = Object.values(selfScores).filter((s: number) => s > 0)
   const othersValues = Object.values(othersScores).filter((s: number) => s > 0)
@@ -891,7 +923,10 @@ function EvaluationComparisonSection({
     ? Math.round(othersValues.reduce((a: number, b: number) => a + b, 0) / othersValues.length * 10) / 10
     : null
 
-  const hasData = selfAnswers.length > 0 || othersAnswers.length > 0
+  // safeOthersAnswers を使ってhasDataを判定する（null ガード済み）
+  const hasData = safeSelfAnswers.length > 0 || safeOthersAnswers.length > 0
+  // 他者評価データの有無（バー表示判定に使用）
+  const hasOthersData = safeOthersAnswers.length > 0
 
   // レーダーチャート用データ
   const radarData = EVALUATION_CATEGORIES.map(cat => ({
@@ -927,7 +962,8 @@ function EvaluationComparisonSection({
                 自己 {selfAvg}
               </span>
             )}
-            {othersAvg !== null && (
+            {/* 他者評価データがある場合のみ平均を表示する */}
+            {hasOthersData && othersAvg !== null && (
               <span className="text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded-full">
                 他者 {othersAvg}
               </span>
@@ -956,7 +992,8 @@ function EvaluationComparisonSection({
                 fillOpacity={0.25}
                 strokeWidth={2}
               />
-              {othersAnswers.length > 0 && (
+              {/* 他者評価データがある場合のみレーダーを表示する */}
+              {hasOthersData && (
                 <Radar
                   name="他者評価平均"
                   dataKey="他者評価平均"
@@ -980,6 +1017,7 @@ function EvaluationComparisonSection({
             {EVALUATION_CATEGORIES.map((cat: string) => {
               const self = selfScores[cat] || 0
               const other = othersScores[cat] || 0
+              // ギャップ判定：両データが揃っている場合のみ
               const catGap = self > 0 && other > 0 ? Math.abs(self - other) : null
               const isCatGap = catGap !== null && catGap >= 1.0
               return (
@@ -989,18 +1027,22 @@ function EvaluationComparisonSection({
                       {isCatGap && '⚠ '}{cat}
                     </span>
                     <div className="flex gap-2 text-xs">
+                      {/* 自己評価の数値（データがある場合のみ） */}
                       {self > 0 && <span className="text-yellow-600">{self}</span>}
-                      {other > 0 && <span className="text-blue-500">{other}</span>}
+                      {/* 他者評価の数値（他者データがある場合のみ、0以外を表示） */}
+                      {hasOthersData && other > 0 && <span className="text-blue-500">{other}</span>}
                     </div>
                   </div>
                   <div className="flex gap-0.5 items-center">
+                    {/* 自己評価バー */}
                     <div className="flex-1 bg-gray-100 rounded-full h-1.5">
                       <div
                         className="bg-yellow-400 h-1.5 rounded-full"
                         style={{ width: `${(self / 5) * 100}%` }}
                       />
                     </div>
-                    {other > 0 && (
+                    {/* 他者評価バー（他者評価データがある場合は常に表示） */}
+                    {hasOthersData && (
                       <div className="flex-1 bg-gray-100 rounded-full h-1.5">
                         <div
                           className="bg-blue-400 h-1.5 rounded-full opacity-70"

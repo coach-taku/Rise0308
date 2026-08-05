@@ -2058,16 +2058,23 @@ export default function CoachDashboard() {
 
                       if (selfAnswerList.length === 0 && othersAnswerList.length === 0) return null
 
+                      // 自己評価・他者評価スコアを算出する
+                      // calcCategoryScoresに正しいevaluatorIdを渡す（自己評価の場合はplayer.id、他者評価は省略）
                       const selfScores = calcCategoryScores(selfAnswerList, player.id)
                       const othersScores = calcCategoryScores(othersAnswerList)
 
+                      // 他者評価データが存在するか確認する（バーグラフ表示の判定に使用）
+                      const hasOthersData = othersAnswerList.length > 0
+
+                      // 平均スコアを算出する（スコアが0より大きい値のみ対象）
                       const selfValues = Object.values(selfScores).filter((s: number) => s > 0)
                       const othersValues = Object.values(othersScores).filter((s: number) => s > 0)
 
                       const selfAvg = selfValues.length > 0
                         ? Math.round(selfValues.reduce((a: number, b: number) => a + b, 0) / selfValues.length * 10) / 10
                         : null
-                      const othersAvg = othersValues.length > 0
+                      // 他者評価データがある場合のみ平均を表示する（データ0件でも平均値0表示を防ぐ）
+                      const othersAvg = hasOthersData && othersValues.length > 0
                         ? Math.round(othersValues.reduce((a: number, b: number) => a + b, 0) / othersValues.length * 10) / 10
                         : null
 
@@ -2103,9 +2110,16 @@ export default function CoachDashboard() {
                                   自己 {selfAvg}
                                 </span>
                               )}
+                              {/* 他者評価データがある場合のみ平均スコアを表示する */}
                               {othersAvg !== null && (
                                 <span className="text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded-full">
                                   他者 {othersAvg}
+                                </span>
+                              )}
+                              {/* 他者評価の回答はあるが全問未回答の場合 */}
+                              {hasOthersData && othersAvg === null && (
+                                <span className="text-gray-400 text-xs bg-gray-50 px-2 py-0.5 rounded-full">
+                                  他者評価 集計中
                                 </span>
                               )}
                             </div>
@@ -2115,6 +2129,7 @@ export default function CoachDashboard() {
                             {EVALUATION_CATEGORIES.map((cat: string) => {
                               const self = selfScores[cat] || 0
                               const other = othersScores[cat] || 0
+                              // ギャップ表示は両データが揃っている場合のみ
                               const catGap = self > 0 && other > 0 ? Math.abs(self - other) : null
                               const isCatGap = catGap !== null && catGap >= 1.0
                               return (
@@ -2124,18 +2139,22 @@ export default function CoachDashboard() {
                                       {isCatGap && '⚠ '}{cat}
                                     </span>
                                     <div className="flex gap-2 text-xs">
+                                      {/* 自己評価の数値（データがある場合のみ） */}
                                       {self > 0 && <span className="text-yellow-600">{self}</span>}
-                                      {other > 0 && <span className="text-blue-500">{other}</span>}
+                                      {/* 他者評価の数値（他者データがある場合のみ、0以外を表示） */}
+                                      {hasOthersData && other > 0 && <span className="text-blue-500">{other}</span>}
                                     </div>
                                   </div>
                                   <div className="flex gap-0.5 items-center">
+                                    {/* 自己評価バー */}
                                     <div className="flex-1 bg-gray-100 rounded-full h-1.5">
                                       <div
                                         className="bg-yellow-400 h-1.5 rounded-full"
                                         style={{ width: `${(self / 5) * 100}%` }}
                                       />
                                     </div>
-                                    {other > 0 && (
+                                    {/* 他者評価バー（他者評価データがある場合は常に表示し、幅で値を示す） */}
+                                    {hasOthersData && (
                                       <div className="flex-1 bg-gray-100 rounded-full h-1.5">
                                         <div
                                           className="bg-blue-400 h-1.5 rounded-full opacity-70"
