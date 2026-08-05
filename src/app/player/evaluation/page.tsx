@@ -9,6 +9,7 @@ import {
   getPendingEvaluationTasks,
   getEvaluationAnswersForTarget,
   getEvaluationHistoryForPlayer,
+  getEvaluationDeliveries,
   submitEvaluationAnswers,
   getLatestSscPlan,
   saveSscPlan,
@@ -170,16 +171,33 @@ export default function EvaluationPage() {
     if (!user) return
     setResultLoading(true)
     try {
-      const answers = await getEvaluationAnswersForTarget(user.id)
-      // 自己評価のみ
+      // 最新の配信IDを取得して、そのデータのみを表示する（複数配信データの混在を防ぐ）
+      const deliveries = await getEvaluationDeliveries()
+      let answers: EvaluationAnswer[] = []
+
+      if (deliveries.length > 0) {
+        // 最新の配信（先頭）のデータのみ取得する
+        const latestDeliveryId = deliveries[0].id
+        answers = await getEvaluationAnswersForTarget(user.id, latestDeliveryId)
+      } else {
+        // 配信がない場合は全件取得する（後方互換）
+        answers = await getEvaluationAnswersForTarget(user.id)
+      }
+
+      // 自己評価のみ（evaluator_id === 自分のID）
       const self = answers.filter(a => a.evaluator_id === user.id)
-      // 他者評価のみ
+      // 他者評価のみ（evaluator_id !== 自分のID）
       const others = answers.filter(a => a.evaluator_id !== user.id)
-      setSelfAnswers(self)
-      setAllAnswers(others)
+
+      // null/undefined ガード: 空配列でフォールバックする
+      setSelfAnswers(self ?? [])
+      setAllAnswers(others ?? [])
       setMode('result')
     } catch (e) {
       console.error('[evaluation] 結果取得エラー:', e)
+      // エラー時もクラッシュしないよう空配列で初期化する
+      setSelfAnswers([])
+      setAllAnswers([])
     } finally {
       setResultLoading(false)
     }
@@ -620,14 +638,16 @@ export default function EvaluationPage() {
                 <div className="space-y-3">
                   {radarData.map(item => {
                     const gap = Math.abs(item['自己評価'] - item['他者評価平均'])
-                    const isGap = gap >= 1 && item['他者評価平均'] > 0
+                    // ギャップ判定：他者評価データが存在する場合のみ
+                    const isGap = gap >= 1 && allAnswers.length > 0 && item['他者評価平均'] > 0
                     return (
                       <div key={item.category}>
                         <div className="flex justify-between items-center mb-1">
                           <span className="text-xs font-medium text-gray-700">{item.category}</span>
                           <div className="flex items-center gap-2 text-xs">
                             <span className="text-yellow-600 font-bold">自己: {item['自己評価']}</span>
-                            {item['他者評価平均'] > 0 && (
+                            {/* 他者評価データがある場合のみ数値を表示する（0点でも表示） */}
+                            {allAnswers.length > 0 && item['他者評価平均'] > 0 && (
                               <span className="text-blue-500 font-bold">他者: {item['他者評価平均']}</span>
                             )}
                             {isGap && (
@@ -637,6 +657,7 @@ export default function EvaluationPage() {
                             )}
                           </div>
                         </div>
+                        {/* 自己評価バー */}
                         <div className="flex gap-1 items-center">
                           <div className="flex-1 bg-gray-200 rounded-full h-1.5">
                             <div
@@ -645,7 +666,8 @@ export default function EvaluationPage() {
                             />
                           </div>
                         </div>
-                        {item['他者評価平均'] > 0 && (
+                        {/* 他者評価バー（他者評価データがある場合は常に表示） */}
+                        {allAnswers.length > 0 && (
                           <div className="flex gap-1 items-center mt-0.5">
                             <div className="flex-1 bg-gray-200 rounded-full h-1.5">
                               <div
