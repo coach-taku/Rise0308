@@ -30,7 +30,9 @@ export async function POST(request: NextRequest) {
     if (!apiKey) return NextResponse.json({ message: 'APIキー未設定' }, { status: 200 })
 
     const prompt = `${RUBRIC}\n\n【振り返りテキスト】\n${reflection.trim()}`
-    const geminiEndpoint = `[https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=$](https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=$){apiKey}`
+    
+    // 正しいエンドポイントURL
+    const geminiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`
 
     const geminiResponse = await fetch(geminiEndpoint, {
       method: 'POST',
@@ -40,7 +42,6 @@ export async function POST(request: NextRequest) {
         generationConfig: { 
           temperature: 0.1, 
           maxOutputTokens: 256,
-          // ★修正ポイント1: JSONモードを明示的に指定
           responseMimeType: 'application/json'
         },
       }),
@@ -51,10 +52,9 @@ export async function POST(request: NextRequest) {
     const geminiData = await geminiResponse.json()
     const rawText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '{}'
 
-    // ★修正ポイント2: 正規表現の除去。直接パース可能に。
     const scoringResult = JSON.parse(rawText)
     
-    // ★修正ポイント3: スコアが確実に1〜4の整数になるようにバリデーション
+    // スコアが確実に1〜4の整数になるようにバリデーション
     const rawScore = Number(scoringResult.score) || 1
     const score = Math.max(1, Math.min(4, Math.round(rawScore)))
 
