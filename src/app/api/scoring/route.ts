@@ -17,96 +17,65 @@ const RUBRIC = `
 `
 
 export async function POST(request: NextRequest) {
-  console.log('[/api/scoring] 1. 処理開始')
-
   try {
     const body = await request.json()
     const { recordId, reflection } = body
 
     // 振り返りが短い場合はスキップ
     if (!recordId || !reflection || reflection.trim().length < 20) {
-      console.log('[/api/scoring] スキップ条件に該当 (recordId未指定 or 振り返り文字数不足)')
+      console.log('【スキップ】振り返りが20文字未満です');
       return NextResponse.json({ message: 'スキップしました' }, { status: 200 })
     }
 
     const apiKey = process.env.GEMINI_API_KEY
     if (!apiKey) {
-      console.warn('[/api/scoring] GEMINI_API_KEY が未設定のためスキップ')
+      console.error('【エラー】GEMINI_API_KEYが設定されていません');
       return NextResponse.json({ message: 'APIキー未設定' }, { status: 200 })
     }
 
     const prompt = `${RUBRIC}\n\n【振り返りテキスト】\n${reflection.trim()}`
-
-    // 正しいエンドポイントURL（APIキーはクエリに含まれるためログ出力しない）
+    
     const geminiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`
 
-    console.log('[/api/scoring] 2. Gemini API 呼び出し開始')
+    console.log('Gemini APIにリクエストを送信中...');
+    const geminiResponse = await fetch(geminiEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { 
+          temperature: 0.1, 
+          maxOutputTokens: 256,
+          responseMimeType: 'application/json'
+        },
+      }),
+    })
 
-    let geminiStatus: number
-    let geminiText: string
-
-    try {
-      const geminiResponse = await fetch(geminiEndpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.1,
-            maxOutputTokens: 256,
-            responseMimeType: 'application/json',
-          },
-        }),
-      })
-
-      geminiStatus = geminiResponse.status
-      // JSONパース前に生テキストとして取得することで、パース失敗を区別できるようにする
-      geminiText = await geminiResponse.text()
-
-      console.log(`[/api/scoring] 3. Gemini API Status: ${geminiStatus}`)
-
-      if (!geminiResponse.ok) {
-        // APIキーや個人情報を含まないレスポンス本文のみログ出力
-        console.error(`[/api/scoring] 4. Gemini API Error Response: ${geminiText}`)
-        throw new Error(`Gemini API error. Status: ${geminiStatus}, Body: ${geminiText}`)
-      }
-    } catch (fetchError) {
-      // fetch自体が例外になった場合（ネットワークエラー等）
-      console.error('[/api/scoring] 5. Gemini API fetch 例外:', fetchError)
-      throw fetchError
+    if (!geminiResponse.ok) {
+      console.error('【エラー】Gemini APIの通信に失敗しました:', geminiResponse.statusText);
+      return NextResponse.json({ error: 'Gemini Error' }, { status: 500 })
     }
 
-    // ---- Gemini API 成功後の後続処理 ----
-    let geminiData: unknown
+    const geminiData = await geminiResponse.json()
+    const rawText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '{}'
+    
+    // AIが不要な記号(```json や ```)をつけてきた場合に取り除く処理
+    const cleanText = rawText.replace(/```json/gi, '').replace(/```/gi, '').trim();
+
+    let scoringResult;
     try {
-      geminiData = JSON.parse(geminiText)
-      console.log('[/api/scoring] 6. Gemini API レスポンスの JSON パース成功')
+      scoringResult = JSON.parse(cleanText)
     } catch (parseError) {
-      console.error('[/api/scoring] 6-ERR. Gemini API レスポンスの JSON パース失敗:', parseError)
-      console.error('[/api/scoring] 6-ERR. パース対象の生テキスト (先頭200文字):', geminiText.slice(0, 200))
-      throw new Error(`Gemini レスポンスの JSON パースに失敗しました: ${parseError}`)
+      console.error('【エラー】JSONの変換に失敗しました。AIの回答:', cleanText);
+      return NextResponse.json({ error: 'データ解析エラー' }, { status: 500 })
     }
-
-    const rawText =
-      (geminiData as { candidates?: { content?: { parts?: { text?: string }[] } }[] })
-        ?.candidates?.[0]?.content?.parts?.[0]?.text || '{}'
-
-    let scoringResult: { score?: unknown; feedback?: string }
-    try {
-      scoringResult = JSON.parse(rawText)
-      console.log('[/api/scoring] 7. スコアリング結果の JSON パース成功')
-    } catch (innerParseError) {
-      console.error('[/api/scoring] 7-ERR. スコアリング結果の JSON パース失敗:', innerParseError)
-      console.error('[/api/scoring] 7-ERR. パース対象テキスト:', rawText)
-      throw new Error(`スコアリング結果の JSON パースに失敗しました: ${innerParseError}`)
-    }
-
+    
     // スコアが確実に1〜4の整数になるようにバリデーション
     const rawScore = Number(scoringResult.score) || 1
     const score = Math.max(1, Math.min(4, Math.round(rawScore)))
+    console.log(`【成功】スコア計算完了: ${score}点`);
 
     if (isSupabaseConfigured()) {
-      // Supabaseの更新処理とエラーチェック
       const { error: supabaseError } = await getSupabase()
         .from('mandala_reflections')
         .update({
@@ -116,17 +85,14 @@ export async function POST(request: NextRequest) {
         .eq('id', recordId)
 
       if (supabaseError) {
-        console.error('[/api/scoring] 8-ERR. Supabase Update Error:', supabaseError)
+        console.error('【エラー】Supabase Update Error:', supabaseError)
         return NextResponse.json({ error: 'DB更新エラー' }, { status: 500 })
       }
     }
 
-    console.log(`[/api/scoring] 9. 処理完了 score=${score}`)
     return NextResponse.json({ score, feedback: scoringResult.feedback }, { status: 200 })
-
-  } catch (error) {
-    // 最終的にキャッチされた例外をスタックトレースごと記録
-    console.error('[/api/scoring] 10. キャッチされた例外 (根本原因):', error)
+  } catch (err) {
+    console.error('【エラー】Scoring API 全体エラー:', err)
     return NextResponse.json({ error: '内部エラー' }, { status: 500 })
   }
 }
