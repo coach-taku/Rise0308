@@ -149,7 +149,7 @@ export default function DailyInputPage() {
         fetch('/api/scoring', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ recordId: savedRecord.id, reflection: reflection.trim() }),
+          body: JSON.stringify({ recordId: savedRecord.id, reflection: reflection.trim(), context: 'daily' }),
         }).catch(e => {
           // スコアリング失敗はサイレントエラーとする（保存自体は完了している）
           console.warn('[daily] スコアリングAPI呼び出しに失敗しました:', e)
