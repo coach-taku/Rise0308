@@ -1,33 +1,40 @@
 /**
  * グロースマインドセット自動スコアリング API Route Handler
+ *
+ * 振り返りを1〜4で採点して保存する。
+ * context が "daily" の場合は、スコア1・2の選手向けにAIコーチングの最初の問いかけも返す。
+ * （2回目以降の深掘りは /api/coaching が担当）
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase'
+import { callGeminiJson, GeminiNotConfiguredError } from '@/lib/gemini'
+import {
+  RUBRIC_TEXT,
+  COACH_GUIDE,
+  TARGET_TABLES,
+  isScoringContext,
+  normalizeScore,
+  asText,
+  needsCoaching,
+} from '@/lib/scoring'
 
 const RUBRIC = `
 あなたはスポーツ選手のメタ認知能力を評価する専門家です。
 以下のルーブリックに基づき、選手の振り返りテキストを1〜4段階で採点してください。
-【採点基準】
-スコア1: 固定マインドセット（能力帰属のみ）
-スコア2: 成長の芽生え（曖昧な改善策）
-スコア3: グロースマインドセット（具体的な改善策）
-スコア4: 深いメタ認知（戦略的なプランB）
+${RUBRIC_TEXT}
+`
+
+// コーチング対象になり得る場合に追加する指示
+const COACHING_ADDON = `
+${COACH_GUIDE}
+【出力形式】
+{ "score": <1-4>, "feedback": "<日本語で50-100文字>", "coaching_question": "<スコアが1か2の場合のみ、コーチとしての問いかけ。3以上なら空文字>" }
+`
+
+const PLAIN_OUTPUT = `
 【出力形式】
 { "score": <1-4>, "feedback": "<日本語で50-100文字>" }
 `
-
-// 保存先テーブルの対応表（context の値 → テーブル名）
-// "daily"              : デイリーノート → daily_records
-// "mandala_reflection" : マンダラ振り返り → mandala_reflections
-const TARGET_TABLES = {
-  daily: 'daily_records',
-  mandala_reflection: 'mandala_reflections',
-} as const
-type ScoringContext = keyof typeof TARGET_TABLES
-
-function isScoringContext(value: unknown): value is ScoringContext {
-  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(TARGET_TABLES, value)
-}
 
 export async function POST(request: NextRequest) {
   try {
@@ -42,73 +49,44 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'contextが不正です' }, { status: 400 })
     }
     const targetTable = TARGET_TABLES[context]
+    // コーチング（深掘り）はデイリーノートのみ対象
+    const withCoaching = context === 'daily'
 
     // 振り返りが短い場合、または保存先の行IDがない場合はスキップ
     if (!recordId || typeof reflection !== 'string' || reflection.trim().length < 20) {
-      console.log('【スキップ】振り返りが20文字未満、または recordId がありません', { context });
+      console.log('【スキップ】振り返りが20文字未満、または recordId がありません', { context })
       return NextResponse.json({ message: 'スキップしました' }, { status: 200 })
     }
 
-    const apiKey = process.env.GEMINI_API_KEY
-    if (!apiKey) {
-      console.error('【エラー】GEMINI_API_KEYが設定されていません');
+    if (!process.env.GEMINI_API_KEY) {
+      console.error('【エラー】GEMINI_API_KEYが設定されていません')
       return NextResponse.json({ message: 'APIキー未設定' }, { status: 200 })
     }
 
-    const prompt = `${RUBRIC}\n\n【振り返りテキスト】\n${reflection.trim()}`
-    
-    const model = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite'
-    // APIキーはURLに含めずヘッダーで渡す（ログ等にキーが残らないようにするため）
-    const geminiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
+    const prompt =
+      `${RUBRIC}${withCoaching ? COACHING_ADDON : PLAIN_OUTPUT}\n\n【振り返りテキスト】\n${reflection.trim()}`
 
-    console.log(`Gemini APIにリクエストを送信中... (model: ${model})`);
-    const geminiResponse = await fetch(geminiEndpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          maxOutputTokens: 1024,
-          responseMimeType: 'application/json',
-          thinkingConfig: { thinkingLevel: 'minimal' },
-        },
-      }),
-    })
-
-    if (!geminiResponse.ok) {
-      const errorBody = await geminiResponse.text()
-      console.error(`【エラー】Gemini APIの通信に失敗しました: ${geminiResponse.status}`, errorBody.slice(0, 500));
+    let scoringResult: Record<string, unknown>
+    try {
+      scoringResult = await callGeminiJson(prompt)
+    } catch (e) {
+      if (e instanceof GeminiNotConfiguredError) {
+        return NextResponse.json({ message: 'APIキー未設定' }, { status: 200 })
+      }
+      console.error('【エラー】Gemini APIの処理に失敗しました:', e instanceof Error ? e.message : e)
       return NextResponse.json({ error: 'Gemini Error' }, { status: 500 })
     }
 
-    const geminiData = await geminiResponse.json()
-    const rawText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '{}'
-    
-    // AIが不要な記号(```json や ```)をつけてきた場合に取り除く処理
-    const cleanText = rawText.replace(/```json/gi, '').replace(/```/gi, '').trim();
-
-    let scoringResult;
-    try {
-      scoringResult = JSON.parse(cleanText)
-    } catch (parseError) {
-      // AIの回答には振り返りの内容が含まれる可能性があるため、本文はログに出さず文字数だけ記録する
-      console.error('【エラー】JSONの変換に失敗しました。AIの回答の文字数:', cleanText.length);
-      return NextResponse.json({ error: 'データ解析エラー' }, { status: 500 })
-    }
-    
     // スコアが確実に1〜4の整数になるようにバリデーション
-    const rawScore = Number(scoringResult.score) || 1
-    const score = Math.max(1, Math.min(4, Math.round(rawScore)))
-    console.log(`【成功】スコア計算完了: ${score}点`);
+    const score = normalizeScore(scoringResult.score)
+    const feedback = asText(scoringResult.feedback)
+    console.log(`【成功】スコア計算完了: ${score}点`)
 
     if (isSupabaseConfigured()) {
       // 更新された行を返してもらい、実際に保存できたか件数を確認する
       const { data: updatedRows, error: supabaseError } = await getSupabase()
         .from(targetTable)
-        .update({
-          mindset_score: score,
-          mindset_feedback: scoringResult.feedback?.trim() || '',
-        })
+        .update({ mindset_score: score, mindset_feedback: feedback })
         .eq('id', recordId)
         .select('id')
 
@@ -125,7 +103,16 @@ export async function POST(request: NextRequest) {
       console.log('【成功】スコアを保存しました', { context, recordId, table: targetTable })
     }
 
-    return NextResponse.json({ score, feedback: scoringResult.feedback }, { status: 200 })
+    // コーチング対象（スコア1・2）かどうかで、問いかけと完了フラグを決める
+    const coaching = withCoaching && needsCoaching(score)
+    const coachingQuestion = coaching ? asText(scoringResult.coaching_question) : ''
+    // 問いかけが作れなかった場合は、対話を始めず完了扱いにする
+    const isCompleted = !(coaching && coachingQuestion)
+
+    return NextResponse.json(
+      { score, feedback, coaching_question: coachingQuestion, is_completed: isCompleted },
+      { status: 200 }
+    )
   } catch (err) {
     console.error('【エラー】Scoring API 全体エラー:', err)
     return NextResponse.json({ error: '内部エラー' }, { status: 500 })

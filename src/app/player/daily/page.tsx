@@ -8,6 +8,7 @@ import { getSession } from '@/lib/session'
 import { calculatePoints, getPointMessage } from '@/lib/points'
 import Header from '@/components/Header'
 import BottomNav from '@/components/BottomNav'
+import CoachingDialog, { CoachingInitial } from '@/components/CoachingDialog'
 import { format } from 'date-fns'
 
 const PARTICIPATION_OPTIONS = [
@@ -53,6 +54,12 @@ export default function DailyInputPage() {
   const [isNewRecord, setIsNewRecord] = useState(false)
   // SSC（Start/Stop/Continue）アクションプラン（評価結果から連動）
   const [sscPlan, setSscPlan] = useState<SscPlan | null>(null)
+  // AIコーチング用: 保存した記録のID・振り返り・スコアリング結果
+  const [savedRecordId, setSavedRecordId] = useState<string | null>(null)
+  const [savedReflection, setSavedReflection] = useState('')
+  const [coachingInitial, setCoachingInitial] = useState<CoachingInitial | null>(null)
+  // スコアリングが行われない／失敗した場合 true（コーチング欄を出さない）
+  const [coachingUnavailable, setCoachingUnavailable] = useState(true)
 
   useEffect(() => {
     const session = getSession()
@@ -140,20 +147,42 @@ export default function DailyInputPage() {
       }
 
       // ============================================================
-      // グロースマインドセット自動スコアリング
+      // グロースマインドセット自動スコアリング ＋ AIコーチング
       // 振り返りテキストが20文字以上入力されている場合に実行する。
-      // 新規・更新問わず、文字数条件を満たしていればスコアリングするよう修正。
+      // 保存完了画面はすぐに表示し、結果はあとから届いた時点で反映する。
+      // スコア1・2ならコーチングの問いかけ、3・4なら称賛のみ表示する。
       // ============================================================
+      setCoachingInitial(null)
       if (reflection.trim().length >= 20) {
-        // fire-and-forget（エラーになっても保存完了は通知済みなので握りつぶす）
+        const trimmed = reflection.trim()
+        setSavedRecordId(savedRecord.id)
+        setSavedReflection(trimmed)
+        setCoachingUnavailable(false)
         fetch('/api/scoring', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ recordId: savedRecord.id, reflection: reflection.trim(), context: 'daily' }),
-        }).catch(e => {
-          // スコアリング失敗はサイレントエラーとする（保存自体は完了している）
-          console.warn('[daily] スコアリングAPI呼び出しに失敗しました:', e)
+          body: JSON.stringify({ recordId: savedRecord.id, reflection: trimmed, context: 'daily' }),
         })
+          .then(res => res.json())
+          .then(data => {
+            if (typeof data?.score === 'number') {
+              setCoachingInitial({
+                score: data.score,
+                feedback: data.feedback || '',
+                coaching_question: data.coaching_question || '',
+                is_completed: data.is_completed !== false,
+              })
+            } else {
+              setCoachingUnavailable(true)
+            }
+          })
+          .catch(e => {
+            // スコアリング失敗はサイレントエラーとする（保存自体は完了している）
+            console.warn('[daily] スコアリングAPI呼び出しに失敗しました:', e)
+            setCoachingUnavailable(true)
+          })
+      } else {
+        setCoachingUnavailable(true)
       }
 
       setIsNewRecord(wasNewRecord)
@@ -203,6 +232,17 @@ export default function DailyInputPage() {
                 <p className="text-4xl font-bold text-orange-500">{streakDays}日</p>
                 <p className="text-sm font-medium text-gray-700 mt-1">{getStreakMessage(streakDays)}</p>
               </div>
+            )}
+
+            {/* AIコーチング（スコア1・2の場合は深掘り対話、3・4は称賛のみ） */}
+            {savedRecordId && (
+              <CoachingDialog
+                key={savedRecordId + savedReflection}
+                recordId={savedRecordId}
+                reflection={savedReflection}
+                initial={coachingInitial}
+                unavailable={coachingUnavailable}
+              />
             )}
 
             <p className="text-gray-600 text-sm mb-6">
