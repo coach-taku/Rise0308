@@ -35,24 +35,26 @@ export async function POST(request: NextRequest) {
 
     const prompt = `${RUBRIC}\n\n【振り返りテキスト】\n${reflection.trim()}`
     
-    const geminiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`
+    const model = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite'
+    const geminiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`
 
-    console.log('Gemini APIにリクエストを送信中...');
+    console.log(`Gemini APIにリクエストを送信中... (model: ${model})`);
     const geminiResponse = await fetch(geminiEndpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { 
-          temperature: 0.1, 
-          maxOutputTokens: 256,
-          responseMimeType: 'application/json'
+        generationConfig: {
+          maxOutputTokens: 1024,
+          responseMimeType: 'application/json',
+          thinkingConfig: { thinkingLevel: 'minimal' },
         },
       }),
     })
 
     if (!geminiResponse.ok) {
-      console.error('【エラー】Gemini APIの通信に失敗しました:', geminiResponse.statusText);
+      const errorBody = await geminiResponse.text()
+      console.error(`【エラー】Gemini APIの通信に失敗しました: ${geminiResponse.status}`, errorBody.slice(0, 500));
       return NextResponse.json({ error: 'Gemini Error' }, { status: 500 })
     }
 
