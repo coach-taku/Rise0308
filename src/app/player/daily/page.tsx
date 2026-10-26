@@ -150,7 +150,7 @@ export default function DailyInputPage() {
       // グロースマインドセット自動スコアリング ＋ AIコーチング
       // 振り返りテキストが20文字以上入力されている場合に実行する。
       // 保存完了画面はすぐに表示し、結果はあとから届いた時点で反映する。
-      // スコア1・2ならコーチングの問いかけ、3・4なら称賛のみ表示する。
+      // レベル1〜4のすべてで、レベル表示・フィードバック・コーチングの問いかけを表示する。
       // ============================================================
       setCoachingInitial(null)
       if (reflection.trim().length >= 20) {
@@ -168,6 +168,9 @@ export default function DailyInputPage() {
             if (typeof data?.score === 'number') {
               setCoachingInitial({
                 score: data.score,
+                level: data.level,
+                level_label: data.level_label,
+                level_description: data.level_description,
                 feedback: data.feedback || '',
                 coaching_question: data.coaching_question || '',
                 is_completed: data.is_completed !== false,
@@ -234,7 +237,7 @@ export default function DailyInputPage() {
               </div>
             )}
 
-            {/* AIコーチング（スコア1・2の場合は深掘り対話、3・4は称賛のみ） */}
+            {/* AIコーチング（レベル1〜4すべてで対話。レベルと称賛メッセージを表示） */}
             {savedRecordId && (
               <CoachingDialog
                 key={savedRecordId + savedReflection}

@@ -2,7 +2,8 @@
  * グロースマインドセット自動スコアリング API Route Handler
  *
  * 振り返りを1〜4で採点して保存する。
- * context が "daily" の場合は、スコア1・2の選手向けにAIコーチングの最初の問いかけも返す。
+ * context が "daily" の場合は、レベル1〜4のすべての選手に対して、
+ * レベルの表示用情報・自己肯定感を高めるフィードバック・AIコーチングの最初の問いかけを返す。
  * （2回目以降の深掘りは /api/coaching が担当）
  */
 import { NextRequest, NextResponse } from 'next/server'
@@ -15,7 +16,9 @@ import {
   isScoringContext,
   normalizeScore,
   asText,
-  needsCoaching,
+  getLevelInfo,
+  FEEDBACK_GUIDE,
+  FALLBACK_FEEDBACK,
 } from '@/lib/scoring'
 
 const RUBRIC = `
@@ -24,11 +27,12 @@ const RUBRIC = `
 ${RUBRIC_TEXT}
 `
 
-// コーチング対象になり得る場合に追加する指示
+// デイリーノート用に追加する指示（全レベルでコーチングを行う）
 const COACHING_ADDON = `
 ${COACH_GUIDE}
+${FEEDBACK_GUIDE}
 【出力形式】
-{ "score": <1-4>, "feedback": "<日本語で50-100文字>", "coaching_question": "<スコアが1か2の場合のみ、コーチとしての問いかけ。3以上なら空文字>" }
+{ "score": <1-4>, "feedback": "<自己肯定感を高めるフィードバック>", "coaching_question": "<レベルに合わせた問いかけ。必ず1つ書く>" }
 `
 
 const PLAIN_OUTPUT = `
@@ -103,14 +107,19 @@ export async function POST(request: NextRequest) {
       console.log('【成功】スコアを保存しました', { context, recordId, table: targetTable })
     }
 
-    // コーチング対象（スコア1・2）かどうかで、問いかけと完了フラグを決める
-    const coaching = withCoaching && needsCoaching(score)
-    const coachingQuestion = coaching ? asText(scoringResult.coaching_question) : ''
+    // デイリーノートは全レベルでコーチングを行う（要件定義書 3.1）
     // 問いかけが作れなかった場合は、対話を始めず完了扱いにする
-    const isCompleted = !(coaching && coachingQuestion)
+    const coachingQuestion = withCoaching ? asText(scoringResult.coaching_question) : ''
+    const isCompleted = !coachingQuestion
 
     return NextResponse.json(
-      { score, feedback, coaching_question: coachingQuestion, is_completed: isCompleted },
+      {
+        score,
+        ...getLevelInfo(score),
+        feedback: withCoaching ? feedback || FALLBACK_FEEDBACK : feedback,
+        coaching_question: coachingQuestion,
+        is_completed: isCompleted,
+      },
       { status: 200 }
     )
   } catch (err) {
