@@ -2,8 +2,10 @@
 
 /**
  * AIコーチング対話UI
- * 振り返りスコアが1・2の選手に、AIコーチが問いかけて深掘りを手伝う（最大3往復）。
- * スコア3・4の場合は称賛メッセージだけを表示する。
+ * 振り返りレベル（1〜4）に関わらず、AIコーチが問いかけて深掘りを手伝う（最大3往復）。
+ *  - レベル1〜2: 具体性・原因・改善策を引き出す問いかけ
+ *  - レベル3〜4: 称賛したうえで、再現性・次の挑戦につながる発展的な問いかけ
+ * 画面上部に「あなたの今日の振り返りレベル」と自己肯定感を高めるフィードバックを表示する。
  */
 import { useState } from 'react'
 
@@ -13,6 +15,9 @@ type Turn = { question: string; answer: string }
 
 export type CoachingInitial = {
   score: number
+  level?: number
+  level_label?: string
+  level_description?: string
   feedback: string
   coaching_question: string
   is_completed: boolean
@@ -25,6 +30,39 @@ type Props = {
   initial: CoachingInitial | null
   // スコアリングが失敗・スキップされた場合 true（何も表示しない）
   unavailable: boolean
+}
+
+// レベルごとのバッジ色（低い順に、落ち着いた色から明るい色へ）
+const LEVEL_COLORS: Record<number, string> = {
+  1: 'bg-gray-100 text-gray-700 border-gray-300',
+  2: 'bg-blue-50 text-blue-700 border-blue-200',
+  3: 'bg-green-50 text-green-700 border-green-300',
+  4: 'bg-yellow-50 text-yellow-800 border-yellow-400',
+}
+
+// 「レベル X / 4」を4つの丸で見せる表示
+function LevelBadge({ data }: { data: CoachingInitial }) {
+  const level = Math.max(1, Math.min(4, data.level ?? data.score))
+  return (
+    <div className={`border rounded-xl p-3 ${LEVEL_COLORS[level]}`}>
+      <p className="text-xs font-bold">あなたの今日の振り返りレベル</p>
+      <div className="flex items-center gap-3 mt-1">
+        <p className="text-2xl font-bold leading-none">
+          レベル {level} <span className="text-base font-medium">/ 4</span>
+        </p>
+        <div className="flex gap-1" aria-label={`レベル${level}／4`}>
+          {[1, 2, 3, 4].map(n => (
+            <span
+              key={n}
+              className={`w-3 h-3 rounded-full border ${n <= level ? 'bg-brand-main border-brand-dark' : 'bg-white border-gray-300'}`}
+            />
+          ))}
+        </div>
+      </div>
+      {data.level_label && <p className="text-xs font-bold mt-2">{data.level_label}</p>}
+      {data.level_description && <p className="text-xs mt-1 leading-relaxed">{data.level_description}</p>}
+    </div>
+  )
 }
 
 export default function CoachingDialog({ recordId, reflection, initial, unavailable }: Props) {
@@ -49,13 +87,17 @@ export default function CoachingDialog({ recordId, reflection, initial, unavaila
 
   const current = latest ?? initial
 
-  // スコア3・4（または問いかけなし）: 称賛のみ
+  // 問いかけが作れなかった場合: レベルとフィードバックのみ表示
   if (history.length === 0 && initial.is_completed) {
-    if (!initial.feedback) return null
     return (
-      <div className="bg-green-50 border border-green-200 rounded-2xl p-4 mb-4 text-left">
-        <p className="text-xs text-green-700 font-bold mb-1">🤖 AIコーチより</p>
-        <p className="text-sm text-gray-700">{initial.feedback}</p>
+      <div className="bg-white border border-green-200 rounded-2xl p-4 mb-4 text-left space-y-3">
+        <LevelBadge data={initial} />
+        {initial.feedback && (
+          <div className="bg-green-50 border border-green-200 rounded-xl p-3">
+            <p className="text-xs text-green-700 font-bold mb-1">🤖 AIコーチより</p>
+            <p className="text-sm text-gray-700 leading-relaxed">{initial.feedback}</p>
+          </div>
+        )}
       </div>
     )
   }
@@ -82,6 +124,9 @@ export default function CoachingDialog({ recordId, reflection, initial, unavaila
       setAnswer('')
       setLatest({
         score: data.score,
+        level: data.level,
+        level_label: data.level_label,
+        level_description: data.level_description,
         feedback: data.feedback || '',
         coaching_question: data.coaching_question || '',
         // 画面側でも3回で必ず終了させる
@@ -102,6 +147,17 @@ export default function CoachingDialog({ recordId, reflection, initial, unavaila
         <span className="text-xs text-gray-400">{Math.min(history.length + (finished ? 0 : 1), MAX_TURNS)}/{MAX_TURNS}</span>
       </div>
 
+      {/* 今日の振り返りレベル（対話が進むと最新のレベルに更新される） */}
+      <LevelBadge data={current} />
+
+      {/* 自己肯定感を高めるフィードバック（最新のもの） */}
+      {current.feedback && (
+        <div className="bg-green-50 border border-green-200 rounded-xl p-3">
+          <p className="text-xs text-green-700 font-bold mb-1">🤖 AIコーチより</p>
+          <p className="text-sm text-gray-700 leading-relaxed">{current.feedback}</p>
+        </div>
+      )}
+
       {/* これまでのやり取り */}
       {history.map((t, i) => (
         <div key={i} className="space-y-2">
@@ -111,11 +167,11 @@ export default function CoachingDialog({ recordId, reflection, initial, unavaila
       ))}
 
       {finished ? (
-        <div className="bg-green-50 border border-green-200 rounded-xl p-3">
+        <div className="bg-brand-main/20 rounded-xl p-3">
           <p className="text-sm text-gray-700">
             {skipped && !current.is_completed
               ? 'おつかれさま！また次の振り返りで一緒に考えよう。'
-              : current.feedback || '具体的な振り返りになりましたね！'}
+              : '今日もここまで考えられたのは、あなたの強みです。続けることが成長の証ですよ！'}
           </p>
         </div>
       ) : (

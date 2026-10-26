@@ -2,15 +2,26 @@
  * AIコーチング（深掘り対話）API Route Handler
  *
  * 選手が問いかけに答えるたびに呼ばれ、以下を行う。
- *  1. 元の振り返り＋これまでの回答をまとめて再スコアリングする
- *  2. スコア3以上、または3回目の回答でまとめフィードバックを返して終了する
- *  3. それ以外は次の問いかけを返す
- * 対話は最大3往復（要件定義書 3.2）。上限はサーバー側でも強制する。
+ *  1. 元の振り返り＋これまでの回答をまとめて再スコアリングする（レベル1〜4）
+ *  2. レベルに合わせた次の問いかけと、自己肯定感を高めるフィードバックを返す
+ *     （レベル1〜2: 深掘り / レベル3〜4: 称賛＋発展的な問いかけ）
+ *  3. 3回目の回答を受けたら、まとめフィードバックを返して終了する
+ * 対話は最大3往復（要件定義書 3.1）。スコアが高くても途中では終了しない。
+ * 上限はサーバー側でも強制する。
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase'
 import { callGeminiJson, GeminiNotConfiguredError } from '@/lib/gemini'
-import { RUBRIC_TEXT, COACH_GUIDE, normalizeScore, asText, MAX_COACHING_TURNS } from '@/lib/scoring'
+import {
+  RUBRIC_TEXT,
+  COACH_GUIDE,
+  FEEDBACK_GUIDE,
+  FALLBACK_FEEDBACK,
+  normalizeScore,
+  asText,
+  getLevelInfo,
+  MAX_COACHING_TURNS,
+} from '@/lib/scoring'
 
 type Turn = { question: string; answer: string }
 
@@ -58,13 +69,14 @@ export async function POST(request: NextRequest) {
 以下の「最初の振り返り」と「コーチとの対話」を全体として読み、ルーブリックで1〜4段階に再採点してください。
 ${RUBRIC_TEXT}
 ${COACH_GUIDE}
+${FEEDBACK_GUIDE}
 【進め方】
 - これは${turnCount}回目の回答を受けた段階です（最大${MAX_COACHING_TURNS}回）。
 - ${isLastTurn
-        ? '今回で対話は終了です。coaching_question は空文字にし、feedback には「具体的な振り返りになりましたね！」のように、選手の気づきや行動計画をたたえるまとめを書く。'
-        : 'スコアが2以下なら、回答を受け止めたうえで次の問いかけを coaching_question に1つ書く。3以上なら coaching_question は空文字にし、feedback でたたえる。'}
+        ? '今回で対話は終了です。coaching_question は空文字にし、feedback には選手の気づきや行動計画を具体的にたたえるまとめを書く。'
+        : 'スコアが1〜2なら、回答を受け止めたうえで原因・具体性・改善策を引き出す問いかけを、3〜4なら、高い思考をたたえたうえで再現性・次の挑戦・プランBなどさらに深める問いかけを、coaching_question に1つ書く。スコアが高くても終了せず、必ず問いかけを書く。'}
 【出力形式】
-{ "score": <1-4>, "feedback": "<日本語で50-100文字>", "coaching_question": "<次の問いかけ。終了時は空文字>" }
+{ "score": <1-4>, "feedback": "<自己肯定感を高めるフィードバック>", "coaching_question": "<次の問いかけ。終了時は空文字>" }
 
 【最初の振り返り】
 ${reflection}
@@ -85,11 +97,12 @@ ${dialogue}
     }
 
     const score = normalizeScore(result.score)
-    const feedback = asText(result.feedback)
+    const feedback = asText(result.feedback) || FALLBACK_FEEDBACK
     let question = asText(result.coaching_question)
 
-    // 終了条件: スコア3以上 / 3回目の回答 / 問いかけが作れなかった場合
-    const isCompleted = score >= 3 || isLastTurn || !question
+    // 終了条件: 3回目の回答 / 問いかけが作れなかった場合
+    // （スコアが3以上でも途中では終了しない）
+    const isCompleted = isLastTurn || !question
     if (isCompleted) question = ''
 
     // 再スコアリングで上がった場合のみ、記録のスコアを更新する（下げることはしない）
@@ -116,7 +129,13 @@ ${dialogue}
     }
 
     return NextResponse.json(
-      { score, feedback, coaching_question: question, is_completed: isCompleted },
+      {
+        score,
+        ...getLevelInfo(score),
+        feedback,
+        coaching_question: question,
+        is_completed: isCompleted,
+      },
       { status: 200 }
     )
   } catch (err) {
