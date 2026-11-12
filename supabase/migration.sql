@@ -2,8 +2,12 @@
 -- KUKI GYMRATS RISE NOTE - Database Migration
 -- Run this SQL in Supabase SQL Editor
 -- ============================================================
--- NOTE: RLSは使用しない。アクセス制御はクライアント側のlocalStorageに
--- 保存されたuser_idとroleを用いてWHERE句で行う。
+-- NOTE: RLS（行レベルセキュリティ）は有効にします。
+-- このファイルでテーブルを作成した後、必ず supabase/rls_enable.sql も実行してください。
+-- （このファイルには RLS を無効にする命令は含みません。無効にすると外部から
+--   データを読み書きされる恐れがあるため、追加しないでください）
+-- アプリのログインは名前＋パスワード（localStorage の user_id / role）で行い、
+-- 画面側のクエリで絞り込みます。
 
 -- 1. Users table (認証もここで管理)
 CREATE TABLE IF NOT EXISTS users (
@@ -135,14 +139,12 @@ CREATE TABLE IF NOT EXISTS practice_sessions (
 CREATE INDEX IF NOT EXISTS idx_practice_sessions_date ON practice_sessions(session_date);
 
 -- ============================================================
--- RLS（Row Level Security）の無効化
+-- RLS（Row Level Security）について
 -- ============================================================
--- このプロジェクトはRLSを使用しない設計です。
--- アクセス制御はクライアント側のlocalStorage（user_id / role）で行います。
--- Supabase でテーブルを作成すると自動でRLSが有効になるため、
--- 以下のコマンドで明示的に無効化してください。
--- （既存テーブルも同様に適用済みであることを確認してください）
-ALTER TABLE practice_sessions DISABLE ROW LEVEL SECURITY;
+-- RLS は supabase/rls_enable.sql で有効化します（許可ルールもそこで定義）。
+-- テーブルを作成したら、続けて rls_enable.sql を実行してください。
+-- 新しいテーブルを追加する場合は、必ず RLS を有効にし、
+-- アプリが使う操作の許可ルールを rls_enable.sql に追加してください。
 
 -- ============================================================
 -- 2026-06-23 追加: スタッツ管理機能（試合パフォーマンスデータ）
@@ -183,9 +185,6 @@ CREATE TABLE IF NOT EXISTS game_stats (
 CREATE INDEX IF NOT EXISTS idx_game_stats_date ON game_stats(game_date);
 CREATE INDEX IF NOT EXISTS idx_game_stats_player ON game_stats(player_name);
 CREATE INDEX IF NOT EXISTS idx_game_stats_type ON game_stats(game_type);
-
--- RLS 無効化（他テーブルと同様の設計方針）
-ALTER TABLE game_stats DISABLE ROW LEVEL SECURITY;
 
 -- ============================================================
 -- 2026-07-14 追加: グロースマインドセット自動スコアリング機能
@@ -239,9 +238,6 @@ CREATE TABLE IF NOT EXISTS mandala_reflections (
 CREATE INDEX IF NOT EXISTS idx_mandala_reflections_user ON mandala_reflections(user_id);
 CREATE INDEX IF NOT EXISTS idx_mandala_reflections_chart ON mandala_reflections(mandala_chart_id);
 
--- RLS 無効化（他テーブルと同様の設計方針）
-ALTER TABLE mandala_reflections DISABLE ROW LEVEL SECURITY;
-
 -- ============================================================
 -- 11. Goal Update Phases table（目標更新フェーズ管理）
 -- コーチが「次期目標設定フェーズ」を開始するためのフラグテーブル
@@ -259,20 +255,18 @@ CREATE TABLE IF NOT EXISTS goal_update_phases (
 -- インデックス（アクティブなフェーズを高速取得するため）
 CREATE INDEX IF NOT EXISTS idx_goal_update_phases_active ON goal_update_phases(is_active);
 
--- RLS 無効化（他テーブルと同様の設計方針）
-ALTER TABLE goal_update_phases DISABLE ROW LEVEL SECURITY;
-
 -- ============================================================
 -- 既存 Supabase プロジェクトへの適用手順
 -- ============================================================
 -- Supabase SQL Editor で以下の順に実行してください:
 -- 1. 上記 CREATE TABLE 文でテーブルを作成する
--- 2. ALTER TABLE game_stats DISABLE ROW LEVEL SECURITY; を実行する
--- ※ 手順2を忘れると保存時に「row-level security policy」エラーが発生します
+-- 2. supabase/rls_enable.sql を実行する（RLS有効化＋許可ルール）
+-- ※ 手順2を忘れると、RLSが無効なままになり警告（重大）が残ります。
+--    逆に、許可ルールのないテーブルは保存時に「row-level security policy」エラーになります
 --
 -- 既存プロジェクトへの追加のみ行う場合（game_stats テーブルのみ追加）:
 -- CREATE TABLE IF NOT EXISTS game_stats (...) を実行した後、
--- ALTER TABLE game_stats DISABLE ROW LEVEL SECURITY; を実行してください
+-- supabase/rls_enable.sql を実行してください
 --
 -- 【2026-07-14 追加分の適用】
 -- 既存の Supabase プロジェクトに mindset スコア機能を追加する場合:
@@ -286,7 +280,7 @@ ALTER TABLE goal_update_phases DISABLE ROW LEVEL SECURITY;
 -- ALTER TABLE mandala_charts ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived'));
 -- ALTER TABLE mandala_charts ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 -- CREATE INDEX IF NOT EXISTS idx_mandala_charts_status ON mandala_charts(user_id, status);
--- 続けて mandala_reflections / goal_update_phases の CREATE TABLE を実行し、RLS を無効化してください。
+-- 続けて mandala_reflections / goal_update_phases の CREATE TABLE を実行し、supabase/rls_enable.sql を実行してください。
 
 -- ============================================================
 -- 12. 10ヶ条評価・SSC連動機能（2026-07-26 追加）
@@ -303,7 +297,6 @@ CREATE TABLE IF NOT EXISTS evaluation_deliveries (
   delivered_at  timestamptz DEFAULT now(),
   created_at    timestamptz DEFAULT now()
 );
-ALTER TABLE evaluation_deliveries DISABLE ROW LEVEL SECURITY;
 
 -- 12-2. evaluation_tasks（評価タスク）
 CREATE TABLE IF NOT EXISTS evaluation_tasks (
@@ -318,7 +311,6 @@ CREATE TABLE IF NOT EXISTS evaluation_tasks (
 );
 CREATE INDEX IF NOT EXISTS idx_evaluation_tasks_evaluator ON evaluation_tasks(evaluator_id);
 CREATE INDEX IF NOT EXISTS idx_evaluation_tasks_delivery  ON evaluation_tasks(delivery_id);
-ALTER TABLE evaluation_tasks DISABLE ROW LEVEL SECURITY;
 
 -- 12-3. evaluation_answers（回答）
 CREATE TABLE IF NOT EXISTS evaluation_answers (
@@ -332,7 +324,6 @@ CREATE TABLE IF NOT EXISTS evaluation_answers (
   UNIQUE (task_id, question_id)
 );
 CREATE INDEX IF NOT EXISTS idx_evaluation_answers_target ON evaluation_answers(target_id);
-ALTER TABLE evaluation_answers DISABLE ROW LEVEL SECURITY;
 
 -- 12-4. evaluation_pairs（ペア設定）
 CREATE TABLE IF NOT EXISTS evaluation_pairs (
@@ -343,7 +334,6 @@ CREATE TABLE IF NOT EXISTS evaluation_pairs (
   created_at    timestamptz DEFAULT now(),
   UNIQUE (player_a_id, player_b_id)
 );
-ALTER TABLE evaluation_pairs DISABLE ROW LEVEL SECURITY;
 
 -- 12-5. ssc_plans（Start/Stop/Continue アクションプラン）
 CREATE TABLE IF NOT EXISTS ssc_plans (
@@ -357,7 +347,6 @@ CREATE TABLE IF NOT EXISTS ssc_plans (
   updated_at      timestamptz DEFAULT now(),
   UNIQUE (user_id, delivery_id)
 );
-ALTER TABLE ssc_plans DISABLE ROW LEVEL SECURITY;
 
 -- ============================================================
 -- 13. 他者評価グループ機能（2026-07-26 追加）
@@ -374,7 +363,6 @@ CREATE TABLE IF NOT EXISTS evaluation_groups (
   created_by  uuid        REFERENCES users(id) ON DELETE SET NULL,
   created_at  timestamptz DEFAULT now()
 );
-ALTER TABLE evaluation_groups DISABLE ROW LEVEL SECURITY;
 
 -- 13-2. evaluation_group_members（グループメンバー中間テーブル）
 CREATE TABLE IF NOT EXISTS evaluation_group_members (
@@ -386,7 +374,6 @@ CREATE TABLE IF NOT EXISTS evaluation_group_members (
 );
 CREATE INDEX IF NOT EXISTS idx_eval_group_members_group  ON evaluation_group_members(group_id);
 CREATE INDEX IF NOT EXISTS idx_eval_group_members_user   ON evaluation_group_members(user_id);
-ALTER TABLE evaluation_group_members DISABLE ROW LEVEL SECURITY;
 
 -- ============================================================
 -- 14. 連絡事項・TODOリスト機能（2026-07-29 追加）
@@ -408,7 +395,6 @@ CREATE TABLE IF NOT EXISTS notices (
 );
 CREATE INDEX IF NOT EXISTS idx_notices_created_by ON notices(created_by);
 CREATE INDEX IF NOT EXISTS idx_notices_is_active  ON notices(is_active);
-ALTER TABLE notices DISABLE ROW LEVEL SECURITY;
 
 -- 14-2. notice_completions（チェック（完了）記録）
 -- ユーザーがチェックを入れると1レコード追加される（論理削除方式）。
@@ -421,7 +407,6 @@ CREATE TABLE IF NOT EXISTS notice_completions (
 );
 CREATE INDEX IF NOT EXISTS idx_notice_completions_notice ON notice_completions(notice_id);
 CREATE INDEX IF NOT EXISTS idx_notice_completions_user   ON notice_completions(user_id);
-ALTER TABLE notice_completions DISABLE ROW LEVEL SECURITY;
 
 -- ============================================================
 -- 【2026-07-29 追加分（連絡事項・TODOリスト）の適用手順】
@@ -444,7 +429,6 @@ ALTER TABLE notice_completions DISABLE ROW LEVEL SECURITY;
 -- );
 -- CREATE INDEX IF NOT EXISTS idx_notices_created_by ON notices(created_by);
 -- CREATE INDEX IF NOT EXISTS idx_notices_is_active  ON notices(is_active);
--- ALTER TABLE notices DISABLE ROW LEVEL SECURITY;
 --
 -- CREATE TABLE IF NOT EXISTS notice_completions (
 --   id           uuid        DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -455,8 +439,7 @@ ALTER TABLE notice_completions DISABLE ROW LEVEL SECURITY;
 -- );
 -- CREATE INDEX IF NOT EXISTS idx_notice_completions_notice ON notice_completions(notice_id);
 -- CREATE INDEX IF NOT EXISTS idx_notice_completions_user   ON notice_completions(user_id);
--- ALTER TABLE notice_completions DISABLE ROW LEVEL SECURITY;
 --
--- ※ ALTER TABLE notices DISABLE ROW LEVEL SECURITY; を実行しないと
---    保存時に「row-level security policy」エラーが発生します。
+-- ※ 上記の後に supabase/rls_enable.sql を実行してください（RLS有効化＋許可ルール）。
+--    許可ルールがないと保存時に「row-level security policy」エラーが発生します。
 -- ============================================================

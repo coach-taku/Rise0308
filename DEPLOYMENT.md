@@ -18,9 +18,27 @@
 ### 1.2 データベースセットアップ
 1. Supabase の **SQL Editor** を開く。
 2. `supabase/migration.sql` の内容を貼り付けて実行する（テーブル・インデックス作成）。
-3. テーブルが正しく作成されたことを **Table Editor** で確認する。
+3. 続けて `supabase/rls_enable.sql` の内容を貼り付けて実行する（RLS有効化＋許可ルール。何度実行しても安全）。
+4. テーブルが正しく作成されたことを **Table Editor** で確認する。
+5. 次のSQLを実行し、全テーブルの「RLS有効」が `true` になっていることを確認する。
 
-**注意**: 本アプリではRLS（Row Level Security）は使用しません。アクセス制御はクライアント側の `localStorage` に保存された `user_id` と `role` を用いて、クエリの `WHERE` 句で行います。
+```sql
+SELECT c.relname AS テーブル名, c.relrowsecurity AS RLS有効
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public' AND c.relkind = 'r'
+ORDER BY c.relrowsecurity, c.relname;
+```
+
+**注意（RLSについて）**: 本アプリはRLS（Row Level Security）を**有効**にしています。セットアップ時は `migration.sql` の後に必ず `rls_enable.sql` も実行してください（実行しないと Supabase から重大警告が出ます）。
+
+- アプリは Supabase の認証（Auth）を使わず、ログイン状態（`user_id` と `role`）をブラウザの `localStorage` で管理しています。そのためデータベースから見ると全員が同じ「匿名ユーザー（`anon`）」で、`rls_enable.sql` では「アプリが実際に使っている操作だけ」を `anon` に許可しています（アプリが使わない削除などは外部から禁止）。
+- 「Aさんは自分のデータだけ」のような人ごとの制限は、Auth を導入するまでできません。読み取りは今まで通り許可しているため、データが外から読める状態は残ります（`users.password` の平文保存を含む。詳細は `docs/要件定義書.md` の RLS 対応の節を参照）。
+- Supabase の Advisors（Security）に「RLS Policy Always True」の注意（Warning）が出るのは想定どおりです。
+
+**新しいテーブルを作るときのルール（必須）**
+1. テーブルを作ったら、必ず `ALTER TABLE ... ENABLE ROW LEVEL SECURITY;` でRLSを有効にする。
+2. アプリのコードが使う操作（読む／追加／更新／削除）だけの許可ルールを `supabase/rls_enable.sql` に追加する（既存テーブルと同じ書き方）。
+3. `migration.sql` に `DISABLE ROW LEVEL SECURITY` を書かない（再実行時にRLSが無効に戻ってしまうため）。
 
 ### 1.3 シードデータの投入
 1. `supabase/seed.sql` の内容をSQL Editorに貼り付けて実行する。
